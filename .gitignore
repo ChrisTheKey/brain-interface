@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# build output
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+
+# test / tooling output
+coverage/
+.vitest/
+.eslintcache
+
+# environment (never commit real values — .env.example is the template)
+.env
+.env.*
+!.env.example
+
+# local assets that are not part of the repository
+public/assets/brain-background.*
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.log
+npm-debug.log*
