@@ -1,10 +1,14 @@
 /**
  * Canvas 2D renderer for the brain.
  *
- * Rendering order: background (CSS layer, below the canvas) → edges →
- * smoke around ZERO → nodes → labels. The renderer owns no data: it draws the
- * layout that was computed from ZERO's graph, plus the transient activity
+ * Rendering order: background image (CSS layer, below the canvas) → scrim →
+ * edges → smoke around ZERO → nodes → labels. The renderer owns no data: it
+ * draws the layout computed from ZERO's graph plus the transient activity
  * pulses the adapter reported.
+ *
+ * The visual language is deliberately black: over the background image every
+ * node is a black disc with a dark separation aura and a thin luminous rim.
+ * That keeps the graph elegant and legible without competing with the image.
  */
 import type { GraphEdge, GraphModel } from '../graph/model';
 import type { BrainLayout, LayoutNode } from '../graph/layout';
@@ -42,17 +46,40 @@ export function drawBrain(
 
   ctx.clearRect(0, 0, width, height);
 
+  drawScrim(ctx, width, height, centerX, centerY, state);
   drawEdges(ctx, centerX, centerY, scale, state);
   smoke.draw(ctx, centerX, centerY, scale);
   drawNodes(ctx, centerX, centerY, scale, state);
+}
+
+/**
+ * Darkens the background image towards the centre so the black brain reads
+ * against it. It breathes very slightly with ZERO's voice.
+ */
+function drawScrim(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  centerX: number,
+  centerY: number,
+  state: RenderState,
+): void {
+  const radius = Math.max(width, height) * 0.75;
+  const voice = state.audio.amplitude;
+  const scrim = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+  scrim.addColorStop(0, `rgba(0, 0, 0, ${(0.82 - voice * 0.12).toFixed(3)})`);
+  scrim.addColorStop(0.45, 'rgba(0, 0, 0, 0.6)');
+  scrim.addColorStop(1, 'rgba(0, 0, 0, 0.18)');
+  ctx.fillStyle = scrim;
+  ctx.fillRect(0, 0, width, height);
 }
 
 function edgeAlpha(edge: GraphEdge, pulses: Map<string, ActivityPulse>): number {
   const source = pulses.get(edge.source)?.energy ?? 0;
   const target = pulses.get(edge.target)?.energy ?? 0;
   const activity = Math.max(source, target);
-  const base = edge.status === 'notLoaded' || edge.status === 'disabled' ? 0.07 : 0.14;
-  return base + activity * 0.5;
+  const base = edge.status === 'notLoaded' || edge.status === 'disabled' ? 0.1 : 0.2;
+  return base + activity * 0.55;
 }
 
 function drawEdges(
@@ -81,17 +108,26 @@ function drawEdges(
     const cx = midX + (midX - centerX) * bow;
     const cy = midY + (midY - centerY) * bow;
 
-    const alpha = edgeAlpha(edge, state.pulses) * Math.min(source.appear, target.appear);
+    const visibility = Math.min(source.appear, target.appear);
+    const alpha = edgeAlpha(edge, state.pulses) * visibility;
     const highlighted =
       state.hoveredId === edge.source ||
       state.hoveredId === edge.target ||
       state.selectedId === edge.source ||
       state.selectedId === edge.target;
 
+    // Black underlay: separates the connection from the background image.
+    ctx.strokeStyle = `rgba(0, 0, 0, ${(0.55 * visibility).toFixed(3)})`;
+    ctx.lineWidth = (highlighted ? 4 : 3) * Math.max(0.6, scale);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(cx, cy, tx, ty);
+    ctx.stroke();
+
     ctx.strokeStyle = highlighted
-      ? `rgba(180, 214, 255, ${Math.min(0.85, alpha + 0.35).toFixed(3)})`
-      : `rgba(150, 175, 225, ${alpha.toFixed(3)})`;
-    ctx.lineWidth = (highlighted ? 1.5 : 0.9) * Math.max(0.6, scale);
+      ? `rgba(255, 244, 252, ${Math.min(0.9, alpha + 0.4).toFixed(3)})`
+      : `rgba(226, 230, 244, ${alpha.toFixed(3)})`;
+    ctx.lineWidth = (highlighted ? 1.4 : 0.85) * Math.max(0.6, scale);
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     ctx.quadraticCurveTo(cx, cy, tx, ty);
@@ -106,9 +142,9 @@ function drawEdges(
       const t = (state.time * 0.5) % 1;
       const px = quadratic(sx, cx, tx, t);
       const py = quadratic(sy, cy, ty, t);
-      ctx.fillStyle = `rgba(190, 230, 255, ${(energy * 0.8).toFixed(3)})`;
+      ctx.fillStyle = `rgba(255, 236, 250, ${(energy * 0.85).toFixed(3)})`;
       ctx.beginPath();
-      ctx.arc(px, py, 1.8 * Math.max(0.7, scale), 0, Math.PI * 2);
+      ctx.arc(px, py, 1.9 * Math.max(0.7, scale), 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -146,49 +182,76 @@ function drawNode(
 
   const x = centerX + layoutNode.x * scale;
   const y = centerY + layoutNode.y * scale;
-  const radius = layoutNode.size * scale * appear * (1 + pulse * 0.22);
+  const radius = layoutNode.size * scale * appear * (1 + pulse * 0.16);
 
   if (radius < 0.6) return;
 
-  const haloRadius = radius * (2.4 + pulse * 1.4);
-  const halo = ctx.createRadialGradient(x, y, radius * 0.4, x, y, haloRadius);
-  halo.addColorStop(0, palette.halo);
-  halo.addColorStop(1, 'rgba(6,9,18,0)');
-  ctx.fillStyle = halo;
-  ctx.globalAlpha = 0.6 * appear;
+  // Dark aura: lifts the black disc off the background image.
+  const auraRadius = radius * 2.6;
+  const aura = ctx.createRadialGradient(x, y, radius * 0.5, x, y, auraRadius);
+  aura.addColorStop(0, `rgba(0, 0, 0, ${(0.85 * appear).toFixed(3)})`);
+  aura.addColorStop(0.6, `rgba(0, 0, 0, ${(0.45 * appear).toFixed(3)})`);
+  aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = aura;
   ctx.beginPath();
-  ctx.arc(x, y, haloRadius, 0, Math.PI * 2);
+  ctx.arc(x, y, auraRadius, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 1;
 
-  ctx.fillStyle = palette.core;
+  // Black body with a barely visible top sheen.
+  const body = ctx.createRadialGradient(
+    x - radius * 0.35,
+    y - radius * 0.4,
+    radius * 0.1,
+    x,
+    y,
+    radius,
+  );
+  body.addColorStop(0, palette.coreInner);
+  body.addColorStop(1, palette.coreOuter);
+  ctx.fillStyle = body;
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = STATUS_ACCENT[layoutNode.node.status];
-  ctx.lineWidth = (selected ? 2.2 : hovered ? 1.7 : 1) * Math.max(0.7, scale);
+  ctx.strokeStyle = hovered || selected ? palette.rimActive : palette.rim;
+  ctx.lineWidth = (selected ? 1.8 : hovered ? 1.4 : 0.9) * Math.max(0.7, scale);
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.stroke();
 
+  // Status arc: a quarter ring, so it never turns the node into a colour blob.
+  if (layoutNode.node.status !== 'idle') {
+    ctx.strokeStyle = STATUS_ACCENT[layoutNode.node.status];
+    ctx.lineWidth = 1.6 * Math.max(0.7, scale);
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 1.16, -Math.PI * 0.15, Math.PI * 0.35);
+    ctx.stroke();
+  }
+
   if (layoutNode.node.status === 'active') {
     const breathe = 0.5 + 0.5 * Math.sin(state.time * 2.4 + layoutNode.angle * 3);
-    ctx.strokeStyle = `rgba(126,224,255,${(0.15 + breathe * 0.35).toFixed(3)})`;
+    ctx.strokeStyle = `rgba(255, 150, 214, ${(0.12 + breathe * 0.3).toFixed(3)})`;
     ctx.lineWidth = 1 * Math.max(0.7, scale);
     ctx.beginPath();
-    ctx.arc(x, y, radius * (1.35 + breathe * 0.25), 0, Math.PI * 2);
+    ctx.arc(x, y, radius * (1.38 + breathe * 0.22), 0, Math.PI * 2);
     ctx.stroke();
   }
 
   const showLabel = hovered || selected || layoutNode.node.depth <= 1 || radius > 12;
   if (showLabel) {
-    const fontSize = Math.max(9, Math.min(14, radius * 0.85));
+    const fontSize = Math.max(9, Math.min(14, radius * 0.8));
     ctx.font = `${fontSize}px "Inter", "SF Pro Text", system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = hovered || selected ? 'rgba(236,244,255,0.95)' : 'rgba(206,220,244,0.62)';
-    ctx.fillText(truncate(layoutNode.node.label, 26), x, y + radius + 6 * scale);
+    const label = truncate(layoutNode.node.label, 26);
+    const labelY = y + radius + 7 * scale;
+    // Black halo behind the text keeps it readable over the image.
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.lineJoin = 'round';
+    ctx.strokeText(label, x, labelY);
+    ctx.fillStyle = hovered || selected ? 'rgba(255, 255, 255, 0.96)' : 'rgba(226, 230, 244, 0.7)';
+    ctx.fillText(label, x, labelY);
   }
 }
 
@@ -203,46 +266,57 @@ function drawZero(
   const pulse = state.pulses.get('zero')?.energy ?? 0;
   const breathe = 0.5 + 0.5 * Math.sin(state.time * 0.9);
   const voice = state.audio.amplitude;
-  const radius = layoutNode.size * scale * (1 + breathe * 0.02 + pulse * 0.08 + voice * 0.12);
+  const radius = layoutNode.size * scale * (1 + breathe * 0.02 + pulse * 0.06 + voice * 0.1);
 
-  const glowRadius = radius * (2.6 + voice * 2.2 + pulse * 0.9);
-  const glow = ctx.createRadialGradient(centerX, centerY, radius * 0.6, centerX, centerY, glowRadius);
-  glow.addColorStop(0, `rgba(120,170,255,${(0.16 + voice * 0.3 + pulse * 0.12).toFixed(3)})`);
-  glow.addColorStop(1, 'rgba(4,6,14,0)');
-  ctx.fillStyle = glow;
+  // Deep black aura — ZERO sits in its own darkness.
+  const auraRadius = radius * (3.1 + voice * 1.4);
+  const aura = ctx.createRadialGradient(centerX, centerY, radius * 0.6, centerX, centerY, auraRadius);
+  aura.addColorStop(0, 'rgba(0, 0, 0, 0.92)');
+  aura.addColorStop(0.55, 'rgba(0, 0, 0, 0.6)');
+  aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = aura;
   ctx.beginPath();
-  ctx.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
+  ctx.arc(centerX, centerY, auraRadius, 0, Math.PI * 2);
   ctx.fill();
 
   const body = ctx.createRadialGradient(
     centerX - radius * 0.3,
-    centerY - radius * 0.35,
-    radius * 0.1,
+    centerY - radius * 0.36,
+    radius * 0.08,
     centerX,
     centerY,
     radius,
   );
-  body.addColorStop(0, '#0d1220');
-  body.addColorStop(0.7, '#05070d');
-  body.addColorStop(1, '#010205');
+  body.addColorStop(0, '#0d0f18');
+  body.addColorStop(0.72, '#040508');
+  body.addColorStop(1, '#000000');
   ctx.fillStyle = body;
   ctx.beginPath();
   ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = `rgba(180,208,255,${(0.35 + breathe * 0.15 + voice * 0.4).toFixed(3)})`;
-  ctx.lineWidth = 1.4 * Math.max(0.8, scale);
+  // Two rims: a quiet inner one, and an outer one that answers the voice.
+  ctx.strokeStyle = `rgba(240, 240, 248, ${(0.34 + breathe * 0.1 + voice * 0.35).toFixed(3)})`;
+  ctx.lineWidth = 1.3 * Math.max(0.8, scale);
   ctx.beginPath();
   ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
   ctx.stroke();
 
+  if (voice > 0.01 || pulse > 0.02) {
+    ctx.strokeStyle = `rgba(255, 140, 208, ${(0.1 + voice * 0.5 + pulse * 0.2).toFixed(3)})`;
+    ctx.lineWidth = 1 * Math.max(0.8, scale);
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius * (1.14 + voice * 0.18), 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   const hovered = state.hoveredId === 'zero' || state.selectedId === 'zero';
-  ctx.font = `${Math.max(11, radius * 0.32)}px "Inter", system-ui, sans-serif`;
+  ctx.font = `${Math.max(11, radius * 0.3)}px "Inter", system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = hovered ? 'rgba(240,246,255,0.95)' : 'rgba(214,228,255,0.72)';
-  ctx.letterSpacing = '3px';
-  ctx.fillText('ZERO', centerX, centerY);
+  ctx.fillStyle = hovered ? 'rgba(255, 255, 255, 0.96)' : 'rgba(232, 234, 246, 0.78)';
+  ctx.letterSpacing = '4px';
+  ctx.fillText('ZERO', centerX + 2, centerY);
   ctx.letterSpacing = '0px';
 }
 

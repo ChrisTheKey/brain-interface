@@ -19,9 +19,6 @@ coverage/
 .env.*
 !.env.example
 
-# local assets that are not part of the repository
-public/assets/brain-background.*
-
 # editors / OS
 .vscode/*
 !.vscode/extensions.json

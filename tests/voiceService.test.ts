@@ -83,3 +83,44 @@ describe('ZeroVoiceService', () => {
     expect(service.currentState).toBe('unavailable');
   });
 });
+
+describe('speech-synthesis word synchronisation', () => {
+  it('pulses once per word and falls silent between words', async () => {
+    const { SpeechSynthesisVoiceProvider } = await import(
+      '../src/voice/speechSynthesisProvider'
+    );
+    let now = 0;
+    const provider = new SpeechSynthesisVoiceProvider(
+      { rate: 1, pitch: 0.82, volume: 1, preferredVoices: [] },
+      () => now,
+    );
+
+    // Not speaking → no level source at all, so the smoke stays off.
+    expect(provider.readLevels()).toBeNull();
+
+    // Drive the internal state the way `speak()` does, without a real engine.
+    const internals = provider as unknown as {
+      speaking: boolean;
+      wordCount: number;
+      startedAt: number;
+      boundaryEnergy: number;
+    };
+    internals.speaking = true;
+    internals.wordCount = 4;
+    internals.startedAt = 0;
+    internals.boundaryEnergy = 0;
+
+    const first = provider.readLevels();
+    expect(first?.onset).toBeGreaterThan(0.9);
+
+    // Between two words the impulse decays towards the floor.
+    for (let i = 0; i < 12; i += 1) provider.readLevels();
+    const between = provider.readLevels();
+    expect(between?.amplitude ?? 1).toBeLessThan(0.25);
+
+    // Next word → new impulse.
+    now = 500;
+    const second = provider.readLevels();
+    expect(second?.onset).toBeGreaterThan(0.9);
+  });
+});

@@ -146,9 +146,9 @@ export class SmokeField {
       const y = centerY + particle.y * scale;
       const radius = particle.size * scale;
       const gradient = ctx.createRadialGradient(x, y, 0, x, y, Math.max(1, radius));
-      gradient.addColorStop(0, `rgba(196, 214, 255, ${alpha.toFixed(4)})`);
-      gradient.addColorStop(0.45, `rgba(120, 150, 220, ${(alpha * 0.35).toFixed(4)})`);
-      gradient.addColorStop(1, 'rgba(10, 14, 28, 0)');
+      gradient.addColorStop(0, `rgba(238, 232, 246, ${alpha.toFixed(4)})`);
+      gradient.addColorStop(0.42, `rgba(196, 150, 196, ${(alpha * 0.32).toFixed(4)})`);
+      gradient.addColorStop(1, 'rgba(12, 6, 14, 0)');
       ctx.fillStyle = gradient;
       ctx.beginPath();
       ctx.arc(x, y, Math.max(1, radius), 0, Math.PI * 2);

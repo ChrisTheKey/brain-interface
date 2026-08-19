@@ -148,11 +148,17 @@ startup.
 
 ## Background asset
 
-The absolute visual background is loaded from `public/assets/brain-background.png`
-(configurable through `VITE_ZERO_BACKGROUND_IMAGE`). It is rendered fullscreen,
-scaled proportionally with `background-size: cover`, fixed to the viewport, and
-sits behind every brain element. Until the file exists a neutral dark gradient
-is used as fallback. See `public/assets/README.md`.
+The background image ships with the repository as
+`public/assets/brain-background.jpg` and is the absolute visual backdrop:
+fullscreen, `background-size: cover`, fixed to the viewport (it never scrolls),
+behind every brain element. Replace the file — or point
+`VITE_ZERO_BACKGROUND_IMAGE` somewhere else — to swap it. If the asset is
+missing, a neutral dark gradient is used instead. See `public/assets/README.md`.
+
+Over that image the graph is deliberately **black**: every node is a black disc
+with a dark separation aura and a thin luminous rim, edges are drawn with a
+black underlay plus a fine light core, and a radial scrim darkens the image
+towards ZERO. Status is a small accent arc — never a coloured fill.
 
 ## ZERO voice
 
@@ -191,6 +197,14 @@ peak, low band < 400 Hz, high band > 2 kHz, and the frame-to-frame onset).
 
 Silence (amplitude below the noise floor) gates emission to zero, so a quiet
 ZERO produces essentially no smoke.
+
+**Word synchronisation.** With the realtime provider the smoke follows the
+waveform itself. With the browser fallback (no Web Audio access to the platform
+synthesizer) it follows the engine's real `boundary` events — one impulse per
+spoken word. If an engine emits no boundary events, the word cadence is
+*estimated* from the utterance text and the configured rate; that estimate only
+runs while an utterance is actually speaking and is marked as such in
+`src/voice/speechSynthesisProvider.ts`.
 
 ## Fallbacks
 

@@ -2,13 +2,27 @@
  * Browser speech-synthesis fallback for ZERO's voice.
  *
  * Used when ZERO's realtime voice is unavailable (no experimental API, no
- * thread, or offline). The platform synthesizer cannot be routed into the Web
- * Audio graph, so this provider reports `connect() === false`: the smoke then
- * reacts to the synthesizer's real word-boundary events only, and never to a
- * fabricated waveform.
+ * thread, offline, or not authenticated). The platform synthesizer cannot be
+ * routed into the Web Audio graph, so `connect()` returns false and the smoke
+ * is driven by this provider's own level source instead:
+ *
+ * - Primary: the engine's real `boundary` events — one impulse per spoken
+ *   word, which is what makes the smoke pulse in sync with the words.
+ * - Fallback: if the engine emits no boundary events (some Android voices do
+ *   not), the word cadence is *estimated* from the utterance text and the
+ *   configured rate. That is an estimate, not a measurement, and it only ever
+ *   runs while an utterance is actually speaking.
  */
 import type { AudioLevels } from '../audio/analyser';
-import { rankVoiceCandidates, type VoiceCharacter, type VoiceProvider, type VoiceSpeakOptions } from './provider';
+import {
+  rankVoiceCandidates,
+  type VoiceCharacter,
+  type VoiceProvider,
+  type VoiceSpeakOptions,
+} from './provider';
+
+/** Words per second at rate 1.0 — used only for the estimated cadence. */
+const BASE_WORDS_PER_SECOND = 2.6;
 
 export class SpeechSynthesisVoiceProvider implements VoiceProvider {
   readonly id = 'speech-synthesis' as const;
@@ -17,8 +31,18 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
 
   private boundaryEnergy = 0;
   private speaking = false;
+  private hasBoundaryEvents = false;
+  private wordCount = 0;
+  private startedAt = 0;
+  private estimatedWordIndex = -1;
+  private now: () => number;
 
-  constructor(private readonly character: VoiceCharacter) {}
+  constructor(
+    private readonly character: VoiceCharacter,
+    now?: () => number,
+  ) {
+    this.now = now ?? (() => Date.now());
+  }
 
   isAvailable(): boolean {
     return typeof globalThis !== 'undefined' && 'speechSynthesis' in globalThis;
@@ -29,15 +53,27 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
     return false;
   }
 
+  /** Level source for the smoke: one impulse per word, silence in between. */
   readLevels(): AudioLevels | null {
     if (!this.speaking) return null;
-    this.boundaryEnergy = Math.max(0, this.boundaryEnergy - 0.045);
-    const amplitude = 0.12 + this.boundaryEnergy * 0.5;
+
+    if (!this.hasBoundaryEvents && this.wordCount > 0) {
+      const elapsedSeconds = (this.now() - this.startedAt) / 1000;
+      const wordsPerSecond = BASE_WORDS_PER_SECOND * Math.max(0.4, this.character.rate);
+      const index = Math.floor(elapsedSeconds * wordsPerSecond);
+      if (index !== this.estimatedWordIndex && index < this.wordCount) {
+        this.estimatedWordIndex = index;
+        this.boundaryEnergy = 1;
+      }
+    }
+
+    this.boundaryEnergy = Math.max(0, this.boundaryEnergy - 0.06);
+    const amplitude = 0.06 + this.boundaryEnergy * 0.62;
     return {
       amplitude,
       peak: amplitude,
-      low: amplitude * 0.7,
-      high: this.boundaryEnergy * 0.6,
+      low: 0.2 + this.boundaryEnergy * 0.5,
+      high: this.boundaryEnergy * 0.75,
       onset: this.boundaryEnergy,
     };
   }
@@ -55,25 +91,28 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
     if (best) utterance.voice = best;
 
     this.speaking = true;
+    this.hasBoundaryEvents = false;
+    this.wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    this.startedAt = this.now();
+    this.estimatedWordIndex = -1;
+    this.boundaryEnergy = 1;
 
     await new Promise<void>((resolve) => {
-      utterance.onboundary = () => {
+      const finish = (): void => {
+        this.speaking = false;
+        this.boundaryEnergy = 0;
+        resolve();
+      };
+      utterance.onboundary = (event: SpeechSynthesisEvent) => {
+        if (event.name && event.name !== 'word') return;
+        this.hasBoundaryEvents = true;
         this.boundaryEnergy = 1;
       };
-      utterance.onend = () => {
-        this.speaking = false;
-        this.boundaryEnergy = 0;
-        resolve();
-      };
-      utterance.onerror = () => {
-        this.speaking = false;
-        this.boundaryEnergy = 0;
-        resolve();
-      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
       options?.signal?.addEventListener('abort', () => {
         synth.cancel();
-        this.speaking = false;
-        resolve();
+        finish();
       });
       synth.speak(utterance);
     });

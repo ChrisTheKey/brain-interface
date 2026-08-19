@@ -81,7 +81,7 @@ export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
     backgroundImage: readString(
       env,
       'VITE_ZERO_BACKGROUND_IMAGE',
-      '/assets/brain-background.png',
+      '/assets/brain-background.jpg',
     ),
     voice: {
       provider,

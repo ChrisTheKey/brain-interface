@@ -6,7 +6,7 @@ describe('configuration', () => {
   it('falls back to documented defaults when nothing is set', () => {
     const resolved = resolveConfig({});
     expect(resolved.zeroWsUrl).toBe('ws://127.0.0.1:8787');
-    expect(resolved.backgroundImage).toBe('/assets/brain-background.png');
+    expect(resolved.backgroundImage).toBe('/assets/brain-background.jpg');
     expect(resolved.voice.provider).toBe('zero-realtime');
   });
 
