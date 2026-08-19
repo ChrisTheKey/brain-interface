@@ -184,9 +184,15 @@ npm run dev
 
 **Local URL:** http://127.0.0.1:3000
 
-Port 3000 is used because it was free and ZERO runs on its own port; Vite falls
-back to the next free port if 3000 is taken, and the actual URL is printed on
-startup.
+Port 3000 is a hard requirement, so `strictPort` is enabled: if something else
+already listens on 3000, the dev server fails with
+`Port 3000 is already in use` instead of silently moving to another port. Two
+deliberate overrides exist:
+
+```bash
+PORT=4000 npm run dev          # run on a different port
+HOST=0.0.0.0 npm run dev       # expose it to the local network (phone → laptop)
+```
 
 ## Background asset
 

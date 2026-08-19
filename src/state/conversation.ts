@@ -33,7 +33,7 @@ export interface ConversationTurnLog {
 export interface ConversationHooks {
   onState: (state: ConversationState, detail?: { error?: string }) => void;
   onTranscript: (text: string, final: boolean) => void;
-  onAgentStart: (agent: ZeroAgent) => void;
+  onAgentStart: (agent: ZeroAgent, task: string) => void;
   onAgentFinish: (result: AgentRunResult) => void;
   onAnswer: (answer: string) => void;
   speak: (text: string) => Promise<void>;
@@ -116,9 +116,10 @@ export class ConversationPipeline {
 
       if (selected.length > 0) {
         this.setState('agentActive');
+        const task = routed.decision.task || text;
         for (const agent of selected) {
-          this.hooks.onAgentStart(agent);
-          const result = await this.runner.invoke(agent, routed.decision.task || text);
+          this.hooks.onAgentStart(agent, task);
+          const result = await this.runner.invoke(agent, task);
           log.runs.push(result);
           this.hooks.onAgentFinish(result);
         }

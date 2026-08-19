@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { config } from '../config';
-import { buildGraph } from '../graph/transform';
+import { buildGraph, type GraphRuntime } from '../graph/transform';
 import type { GraphModel } from '../graph/model';
 import { ZeroClient, type ConnectionState } from '../zero/client';
 import { ZeroDataAdapter, type ActivityEvent, type ZeroSnapshot } from '../zero/adapter';
@@ -40,7 +40,7 @@ export interface BrainState {
   levels: () => ReturnType<ZeroVoiceService['levels']>;
 }
 
-export function useZeroBrain(): BrainState {
+export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
   const [connection, setConnection] = useState<ConnectionState>('idle');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<ZeroSnapshot | null>(null);
@@ -197,8 +197,10 @@ export function useZeroBrain(): BrainState {
     };
   }, [client]);
 
+  const activeAgentIds = runtime.activeAgentIds;
+  const agentTasks = runtime.agentTasks;
   const graph = useMemo(() => {
-    const model = buildGraph(snapshot);
+    const model = buildGraph(snapshot, { activeAgentIds, agentTasks });
     if (threadStatuses.size > 0) {
       for (const node of model.nodes) {
         const threadId = node.metadata['threadId'];
@@ -216,7 +218,7 @@ export function useZeroBrain(): BrainState {
       }
     }
     return model;
-  }, [snapshot, threadStatuses]);
+  }, [snapshot, threadStatuses, activeAgentIds, agentTasks]);
 
   const speak = useCallback(async (text: string): Promise<void> => {
     await voiceRef.current?.speak(text);

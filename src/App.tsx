@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { BrainStage } from './ui/BrainStage';
 import { DetailPanel } from './ui/DetailPanel';
 import { NodeTooltip } from './ui/NodeTooltip';
@@ -9,9 +9,14 @@ import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
 import { config } from './config';
 import type { GraphNode } from './graph/model';
 import type { ZeroAgent } from './zero/agentRegistry';
+import type { GraphRuntime } from './graph/transform';
 
 export default function App(): React.JSX.Element {
-  const brain = useZeroBrain();
+  // Runtime facts about agent runs feed back into the graph, so an agent node
+  // is `active` exactly while its ZERO thread runs.
+  const [runtime, setRuntime] = useState<GraphRuntime>({});
+  const agentTasksRef = useRef<Map<string, { task: string; status: string; at: number }>>(new Map());
+  const brain = useZeroBrain(runtime);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{
     node: GraphNode | null;
@@ -21,14 +26,34 @@ export default function App(): React.JSX.Element {
   const agents = useMemo<ZeroAgent[]>(() => brain.snapshot?.agents ?? [], [brain.snapshot]);
 
   const handleAgentActivity = useCallback(
-    (agentId: string, phase: 'start' | 'finish') => {
+    (
+      agentId: string,
+      phase: 'start' | 'finish',
+      detail?: { task?: string; result?: { status: string } },
+    ) => {
       // Real activity, real pulse: the ZERO → agent edge lights up exactly
       // while that agent's thread is running.
+      const now = Date.now();
       brain.pulsesRef.current.set(`agent:${agentId}`, {
         energy: phase === 'start' ? 1 : 0.4,
-        at: Date.now(),
+        at: now,
       });
-      brain.pulsesRef.current.set('zero', { energy: 0.8, at: Date.now() });
+      brain.pulsesRef.current.set('zero', { energy: 0.8, at: now });
+
+      const tasks = agentTasksRef.current;
+      const previous = tasks.get(agentId);
+      tasks.set(agentId, {
+        task: detail?.task ?? previous?.task ?? '',
+        status: phase === 'start' ? 'running' : (detail?.result?.status ?? 'completed'),
+        at: now,
+      });
+      setRuntime((current) => ({
+        activeAgentIds:
+          phase === 'start'
+            ? [...new Set([...(current.activeAgentIds ?? []), agentId])]
+            : (current.activeAgentIds ?? []).filter((id) => id !== agentId),
+        agentTasks: new Map(tasks),
+      }));
     },
     [brain.pulsesRef],
   );

@@ -211,3 +211,63 @@ describe('buildGraph', () => {
     expect(graph.nodes.filter((node) => node.type === 'app')).toHaveLength(0);
   });
 });
+
+describe('runtime agent state', () => {
+  it('marks an agent active only while its real run is in flight', () => {
+    const withAgent = snapshot({
+      agents: [
+        {
+          id: 'seo',
+          name: 'SEO',
+          cwd: '/agents/SEO',
+          enabled: true,
+          source: 'scan',
+          classification: 'agent',
+          classificationReason: 'ships agent instructions',
+          callable: true,
+          invocationMethod: 'thread/start',
+        },
+      ],
+    });
+
+    const idle = buildGraph(withAgent);
+    expect(idle.nodes.find((node) => node.id === 'agent:seo')?.status).toBe('idle');
+
+    const running = buildGraph(withAgent, {
+      activeAgentIds: ['seo'],
+      agentTasks: new Map([['seo', { task: 'Audit example.com', status: 'running', at: 1 }]]),
+    });
+    const node = running.nodes.find((entry) => entry.id === 'agent:seo');
+    expect(node?.status).toBe('active');
+    expect(node?.metadata['currentTask']).toBe('Audit example.com');
+    expect(node?.metadata['lastRunStatus']).toBe('running');
+  });
+
+  it('keeps the finished task as last activity, not as a current one', () => {
+    const graph = buildGraph(
+      snapshot({
+        agents: [
+          {
+            id: 'seo',
+            name: 'SEO',
+            cwd: '/agents/SEO',
+            enabled: true,
+            source: 'scan',
+            classification: 'agent',
+            classificationReason: 'runnable workspace',
+            callable: true,
+            invocationMethod: 'thread/start',
+          },
+        ],
+      }),
+      {
+        activeAgentIds: [],
+        agentTasks: new Map([['seo', { task: 'Audit example.com', status: 'completed', at: 1 }]]),
+      },
+    );
+    const node = graph.nodes.find((entry) => entry.id === 'agent:seo');
+    expect(node?.status).toBe('idle');
+    expect(node?.metadata['lastTask']).toBe('Audit example.com');
+    expect(node?.metadata['currentTask']).toBeUndefined();
+  });
+});

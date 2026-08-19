@@ -38,7 +38,17 @@ import {
   type NodeStatus,
 } from './model';
 
-export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
+export interface GraphRuntime {
+  /** Agents whose ZERO thread is running right now. */
+  activeAgentIds?: readonly string[];
+  /** Last (or current) task per agent, from the real run log. */
+  agentTasks?: ReadonlyMap<string, { task: string; status: string; at: number }>;
+}
+
+export function buildGraph(
+  snapshot: ZeroSnapshot | null,
+  runtime: GraphRuntime = {},
+): GraphModel {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const notes: string[] = [];
@@ -86,16 +96,29 @@ export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
 
   /* --------------------------- agent registry ----------------------------- */
 
+  const activeAgents = new Set(runtime.activeAgentIds ?? []);
   const agentByCwd = new Map<string, GraphNode>();
   for (const agent of snapshot.agents) {
+    const running = activeAgents.has(agent.id);
+    const lastRun = runtime.agentTasks?.get(agent.id);
     const node: GraphNode = {
       id: agentNodeId(agent.id),
       type: 'agent',
       label: agent.name,
-      status: agent.enabled ? 'idle' : 'disabled',
+      status: running ? 'active' : agent.enabled ? 'idle' : 'disabled',
       depth: 1,
       parentId: ZERO_NODE_ID,
-      metadata: agentMetadata(agent),
+      metadata: {
+        ...agentMetadata(agent),
+        ...(running ? { running: true } : {}),
+        ...(lastRun
+          ? {
+              [running ? 'currentTask' : 'lastTask']: lastRun.task,
+              lastRunStatus: lastRun.status,
+              lastActivity: new Date(lastRun.at).toISOString(),
+            }
+          : {}),
+      },
       ...(agent.description ? { description: agent.description } : {}),
     };
     nodes.push(node);

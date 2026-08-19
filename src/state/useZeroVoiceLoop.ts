@@ -46,7 +46,11 @@ export interface VoiceLoopOptions {
   speak: (text: string) => Promise<void>;
   /** Stops ZERO's voice output — used for barge-in when the user speaks. */
   stopSpeaking?: () => void;
-  onAgentActivity?: (agentId: string, phase: 'start' | 'finish', result?: AgentRunResult) => void;
+  onAgentActivity?: (
+    agentId: string,
+    phase: 'start' | 'finish',
+    detail?: { task?: string; result?: AgentRunResult },
+  ) => void;
 }
 
 export function useZeroVoiceLoop(options: VoiceLoopOptions): VoiceLoopApi {
@@ -105,13 +109,13 @@ export function useZeroVoiceLoop(options: VoiceLoopOptions): VoiceLoopApi {
           setError(detail?.error ?? null);
         },
         onTranscript: (text) => setTranscript(text),
-        onAgentStart: (agent) => {
+        onAgentStart: (agent, task) => {
           setActiveAgentIds((previous) => [...new Set([...previous, agent.id])]);
-          activityRef.current?.(agent.id, 'start');
+          activityRef.current?.(agent.id, 'start', { task });
         },
         onAgentFinish: (result) => {
           setActiveAgentIds((previous) => previous.filter((id) => id !== result.agentId));
-          activityRef.current?.(result.agentId, 'finish', result);
+          activityRef.current?.(result.agentId, 'finish', { result });
         },
         onAnswer: (text) => setAnswer(text),
         speak: (text) => speakRef.current(text),
