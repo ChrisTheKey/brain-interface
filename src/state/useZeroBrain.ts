@@ -21,6 +21,8 @@ import type { VoiceState } from '../voice/service';
 const MAX_ACTIVITY = 60;
 
 export interface BrainState {
+  /** The live ZERO client (null until the first connection attempt). */
+  client: ZeroClient | null;
   connection: ConnectionState;
   connectionError: string | null;
   snapshot: ZeroSnapshot | null;
@@ -32,7 +34,7 @@ export interface BrainState {
   voiceReason: string | undefined;
   voiceProviderId: string | null;
   lastAgentMessage: string | null;
-  speak: (text: string) => void;
+  speak: (text: string) => Promise<void>;
   stopSpeaking: () => void;
   refresh: () => void;
   levels: () => ReturnType<ZeroVoiceService['levels']>;
@@ -49,6 +51,23 @@ export function useZeroBrain(): BrainState {
   const [lastAgentMessage, setLastAgentMessage] = useState<string | null>(null);
   const [voiceProviderId, setVoiceProviderId] = useState<string | null>(null);
 
+  // The transport is created once, outside the effect, so consumers can use it
+  // during render without a state round-trip.
+  const [client] = useState<ZeroClient>(
+    () =>
+      new ZeroClient({
+        url: config.zeroWsUrl,
+        clientInfo: {
+          name: config.clientName,
+          title: 'Brain Interface',
+          version: config.clientVersion,
+        },
+        experimentalApi: config.experimentalApi,
+        // The brain does not render token-level deltas; skip that firehose.
+        optOutNotificationMethods: ['item/agentMessage/delta', 'item/reasoning/summaryTextDelta'],
+      }),
+  );
+
   const pulsesRef = useRef<Map<string, { energy: number; at: number }>>(new Map());
   const clientRef = useRef<ZeroClient | null>(null);
   const adapterRef = useRef<ZeroDataAdapter | null>(null);
@@ -56,20 +75,12 @@ export function useZeroBrain(): BrainState {
   const selectedThreadRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const client = new ZeroClient({
-      url: config.zeroWsUrl,
-      clientInfo: {
-        name: config.clientName,
-        title: 'Brain Interface',
-        version: config.clientVersion,
-      },
-      experimentalApi: config.experimentalApi,
-      // The brain does not render token-level deltas; skip that firehose.
-      optOutNotificationMethods: ['item/agentMessage/delta', 'item/reasoning/summaryTextDelta'],
-    });
     const adapter = new ZeroDataAdapter(client, {
       extraCwds: config.extraCwds,
       threadLimit: config.threadLimit,
+      agentRoot: config.agents.root,
+      agentManifestPath: config.agents.manifestPath,
+      execSandbox: config.agents.execSandbox,
     });
     clientRef.current = client;
     adapterRef.current = adapter;
@@ -184,7 +195,7 @@ export function useZeroBrain(): BrainState {
       adapterRef.current = null;
       voiceRef.current = null;
     };
-  }, []);
+  }, [client]);
 
   const graph = useMemo(() => {
     const model = buildGraph(snapshot);
@@ -207,8 +218,8 @@ export function useZeroBrain(): BrainState {
     return model;
   }, [snapshot, threadStatuses]);
 
-  const speak = useCallback((text: string) => {
-    void voiceRef.current?.speak(text);
+  const speak = useCallback(async (text: string): Promise<void> => {
+    await voiceRef.current?.speak(text);
   }, []);
 
   const stopSpeaking = useCallback(() => {
@@ -232,6 +243,7 @@ export function useZeroBrain(): BrainState {
   }, []);
 
   return {
+    client,
     connection,
     connectionError,
     snapshot,

@@ -2,13 +2,19 @@
  * Detail view for a selected node. Only shows values ZERO actually reported —
  * there are no derived KPIs, no invented metrics.
  */
+import { useState } from 'react';
 import type { GraphEdge, GraphModel, GraphNode } from '../graph/model';
 import type { ActivityEvent } from '../zero/adapter';
+import type { ZeroAgent } from '../zero/agentRegistry';
 
 export interface DetailPanelProps {
   node: GraphNode | null;
   graph: GraphModel;
   activity: ActivityEvent[];
+  /** Set when the selected node is a registry agent ZERO can actually run. */
+  agent?: ZeroAgent | null;
+  agentBusy?: boolean;
+  onRunAgent?: (agent: ZeroAgent, task: string) => void;
   onClose: () => void;
   onSelect: (nodeId: string) => void;
   onSpeak?: (text: string) => void;
@@ -18,10 +24,14 @@ export function DetailPanel({
   node,
   graph,
   activity,
+  agent,
+  agentBusy,
+  onRunAgent,
   onClose,
   onSelect,
   onSpeak,
 }: DetailPanelProps): React.JSX.Element | null {
+  const [task, setTask] = useState('');
   if (!node) return null;
 
   const nodesById = new Map(graph.nodes.map((entry) => [entry.id, entry]));
@@ -96,6 +106,37 @@ export function DetailPanel({
               </li>
             ))}
           </ul>
+        </section>
+      ) : null}
+
+      {agent && onRunAgent ? (
+        <section>
+          <h3>Run this agent</h3>
+          <form
+            className="agent-run"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const text = task.trim();
+              if (text.length === 0) return;
+              setTask('');
+              onRunAgent(agent, text);
+            }}
+          >
+            <input
+              type="text"
+              value={task}
+              placeholder={`Task for ${agent.name}`}
+              onChange={(event) => setTask(event.target.value)}
+              aria-label={`Task for ${agent.name}`}
+              disabled={agentBusy}
+            />
+            <button type="submit" className="text-button" disabled={agentBusy}>
+              {agentBusy ? 'ZERO is busy…' : 'run'}
+            </button>
+          </form>
+          <p className="detail-description">
+            ZERO starts a thread in <code>{agent.cwd}</code> and runs the task there.
+          </p>
         </section>
       ) : null}
 

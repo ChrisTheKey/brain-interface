@@ -15,6 +15,8 @@ function snapshot(partial: Partial<ZeroSnapshot> = {}): ZeroSnapshot {
       agentRoles: [],
       configuredMcpServers: [],
     },
+    agents: [],
+    agentRegistry: { source: 'none', root: '/workspace', repositories: [] },
     threads: [],
     loadedThreadIds: [],
     skills: [],

@@ -22,6 +22,14 @@ export interface ActivityPulse {
   at: number;
 }
 
+export type ConversationVisualState =
+  | 'idle'
+  | 'listening'
+  | 'processing'
+  | 'agentActive'
+  | 'speaking'
+  | 'error';
+
 export interface RenderState {
   graph: GraphModel;
   layout: BrainLayout;
@@ -29,6 +37,10 @@ export interface RenderState {
   hoveredId: string | null;
   selectedId: string | null;
   audio: AudioLevels;
+  /** What ZERO is doing right now — each state has its own quiet signature. */
+  conversation: ConversationVisualState;
+  /** Real microphone input level while listening, 0..1. */
+  micLevel: number;
   /** Seconds since start, used for the slow ZERO breathing. */
   time: number;
 }
@@ -310,6 +322,8 @@ function drawZero(
     ctx.stroke();
   }
 
+  drawConversationState(ctx, centerX, centerY, radius, state);
+
   const hovered = state.hoveredId === 'zero' || state.selectedId === 'zero';
   ctx.font = `${Math.max(11, radius * 0.3)}px "Inter", system-ui, sans-serif`;
   ctx.textAlign = 'center';
@@ -318,6 +332,61 @@ function drawZero(
   ctx.letterSpacing = '4px';
   ctx.fillText('ZERO', centerX + 2, centerY);
   ctx.letterSpacing = '0px';
+}
+
+/**
+ * The conversation states are visually distinct but deliberately quiet:
+ * listening contracts inward with the real microphone level, processing turns
+ * a thin arc, agentActive doubles it, error shows a red rim. Speaking needs no
+ * extra mark — that is what the audio-reactive smoke is for.
+ */
+function drawConversationState(
+  ctx: CanvasRenderingContext2D,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  state: RenderState,
+): void {
+  const { conversation, time } = state;
+  if (conversation === 'idle' || conversation === 'speaking') return;
+
+  if (conversation === 'listening') {
+    const level = Math.min(1, state.micLevel);
+    const wave = (time * 0.6) % 1;
+    for (const phase of [wave, (wave + 0.5) % 1]) {
+      const ringRadius = radius * (2.1 - phase * 0.85);
+      const alpha = (1 - phase) * (0.12 + level * 0.5);
+      ctx.strokeStyle = `rgba(214, 232, 255, ${alpha.toFixed(3)})`;
+      ctx.lineWidth = 1 + level * 1.6;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    return;
+  }
+
+  if (conversation === 'error') {
+    ctx.strokeStyle = 'rgba(255, 120, 120, 0.8)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius * 1.2, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+
+  // processing / agentActive: one or two slowly turning arcs.
+  const arcs = conversation === 'agentActive' ? 2 : 1;
+  for (let i = 0; i < arcs; i += 1) {
+    const offset = (time * (0.9 + i * 0.35) + i * Math.PI) % (Math.PI * 2);
+    ctx.strokeStyle =
+      conversation === 'agentActive'
+        ? 'rgba(255, 168, 220, 0.7)'
+        : 'rgba(226, 232, 248, 0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius * (1.24 + i * 0.16), offset, offset + Math.PI * 0.55);
+    ctx.stroke();
+  }
 }
 
 function quadratic(p0: number, p1: number, p2: number, t: number): number {

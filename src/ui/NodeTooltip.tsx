@@ -7,7 +7,8 @@ export interface NodeTooltipProps {
 
 const TYPE_LABEL: Record<GraphNode['type'], string> = {
   zero: 'Orchestrator',
-  agent: 'Agent (thread)',
+  agent: 'Agent',
+  session: 'Session (ZERO thread)',
   subAgent: 'Sub-agent',
   skill: 'Knowledge (skill)',
   mcpServer: 'Tool provider (MCP server)',

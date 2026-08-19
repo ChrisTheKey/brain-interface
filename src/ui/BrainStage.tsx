@@ -6,7 +6,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { BrainLayout } from '../graph/layout';
 import type { GraphModel, GraphNode } from '../graph/model';
-import { drawBrain, type ActivityPulse } from '../render/brainRenderer';
+import {
+  drawBrain,
+  type ActivityPulse,
+  type ConversationVisualState,
+} from '../render/brainRenderer';
 import { SmokeField } from '../render/smoke';
 import type { AudioLevels } from '../audio/analyser';
 
@@ -14,6 +18,8 @@ export interface BrainStageProps {
   graph: GraphModel;
   pulsesRef: RefObject<Map<string, ActivityPulse>>;
   levels: () => AudioLevels;
+  conversation: ConversationVisualState;
+  micLevel: () => number;
   selectedId: string | null;
   onSelect: (node: GraphNode | null) => void;
   onHover: (node: GraphNode | null, position: { x: number; y: number } | null) => void;
@@ -23,6 +29,8 @@ export function BrainStage({
   graph,
   pulsesRef,
   levels,
+  conversation,
+  micLevel,
   selectedId,
   onSelect,
   onHover,
@@ -34,6 +42,7 @@ export function BrainStage({
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(selectedId);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const conversationRef = useRef<ConversationVisualState>(conversation);
   const [, setFrame] = useState(0);
 
   useEffect(() => {
@@ -44,6 +53,10 @@ export function BrainStage({
   useEffect(() => {
     selectedRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -105,6 +118,8 @@ export function BrainStage({
           hoveredId: hoveredRef.current,
           selectedId: selectedRef.current,
           audio,
+          conversation: conversationRef.current,
+          micLevel: micLevel(),
           time: elapsed,
         },
         smoke,
@@ -131,7 +146,7 @@ export function BrainStage({
       document.removeEventListener('visibilitychange', onVisibility);
       smoke.clear();
     };
-  }, [levels, pulsesRef]);
+  }, [levels, micLevel, pulsesRef]);
 
   const toLayoutCoords = (event: React.PointerEvent<HTMLCanvasElement>): { x: number; y: number } | null => {
     const canvas = canvasRef.current;

@@ -62,7 +62,7 @@ describe('ZeroDataAdapter', () => {
       },
     }, ['app/list']);
 
-    const adapter = new ZeroDataAdapter(client, { extraCwds: [], threadLimit: 10 });
+    const adapter = new ZeroDataAdapter(client, { extraCwds: [], threadLimit: 10, agentRoot: '', agentManifestPath: '', execSandbox: 'readOnly' });
     const snapshot = await adapter.loadSnapshot();
 
     expect(snapshot.zero.model).toBe('gpt-5.1-codex');
@@ -80,7 +80,7 @@ describe('ZeroDataAdapter', () => {
 
   it('turns ZERO notifications into activity events', async () => {
     const { client, emit } = makeClient(THREADS);
-    const adapter = new ZeroDataAdapter(client, { extraCwds: [], threadLimit: 10 });
+    const adapter = new ZeroDataAdapter(client, { extraCwds: [], threadLimit: 10, agentRoot: '', agentManifestPath: '', execSandbox: 'readOnly' });
     const events: string[] = [];
     adapter.on('activity', (event) => events.push(`${event.kind}:${event.label}`));
     adapter.listen();
@@ -101,7 +101,7 @@ describe('ZeroDataAdapter', () => {
 
   it('marks tool nodes touched by MCP tool calls', async () => {
     const { client, emit } = makeClient(THREADS);
-    const adapter = new ZeroDataAdapter(client, { extraCwds: [], threadLimit: 10 });
+    const adapter = new ZeroDataAdapter(client, { extraCwds: [], threadLimit: 10, agentRoot: '', agentManifestPath: '', execSandbox: 'readOnly' });
     const touches: string[][] = [];
     adapter.on('activity', (event) => touches.push(event.touches ?? []));
     adapter.listen();

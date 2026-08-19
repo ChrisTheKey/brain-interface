@@ -4,7 +4,9 @@
  * Mapping (all edges are read out of ZERO's data, never generated):
  *
  *   ZERO                      ← account/read + config/read + initialize userAgent
- *    ├─ agent                 ← thread/list (sourceKinds cli|vscode|exec|appServer|unknown)
+ *    ├─ agent                 ← agent registry (repositories ZERO can run a thread in)
+ *    │   └─ session           ← thread whose cwd is that agent's workspace
+ *    ├─ session               ← thread/list (sourceKinds cli|vscode|exec|appServer|unknown)
  *    │   └─ subAgent          ← thread.source.subAgent.thread_spawn.parent_thread_id
  *    ├─ subAgent (review/…)   ← thread.source.subAgent = "review"|"compact"|"memory_consolidation"
  *    ├─ skill (knowledge)     ← skills/list  (user/system/admin scope → attached to ZERO)
@@ -18,8 +20,11 @@
  *   `skills/list` cwd equals the thread's cwd (that scoping is ZERO's own).
  */
 import type { ZeroSnapshot } from '../zero/adapter';
+import type { ZeroAgent } from '../zero/agentRegistry';
+import { summarizeClassifications } from '../zero/agentClassifier';
 import type { SkillMetadata, Thread, ThreadStatus } from '../zero/protocol';
 import {
+  agentNodeId,
   appNodeId,
   mcpServerNodeId,
   mcpToolNodeId,
@@ -79,7 +84,32 @@ export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
 
   const loaded = new Set(snapshot.loadedThreadIds);
 
-  /* ----------------------------- agents ---------------------------------- */
+  /* --------------------------- agent registry ----------------------------- */
+
+  const agentByCwd = new Map<string, GraphNode>();
+  for (const agent of snapshot.agents) {
+    const node: GraphNode = {
+      id: agentNodeId(agent.id),
+      type: 'agent',
+      label: agent.name,
+      status: agent.enabled ? 'idle' : 'disabled',
+      depth: 1,
+      parentId: ZERO_NODE_ID,
+      metadata: agentMetadata(agent),
+      ...(agent.description ? { description: agent.description } : {}),
+    };
+    nodes.push(node);
+    agentByCwd.set(normalizeCwd(agent.cwd), node);
+    edges.push({
+      id: `edge:agent:${agent.id}`,
+      source: ZERO_NODE_ID,
+      target: node.id,
+      relationship: 'agent',
+      status: node.status,
+    });
+  }
+
+  /* ----------------------------- sessions --------------------------------- */
 
   const threadNodes = new Map<string, GraphNode>();
 
@@ -88,7 +118,7 @@ export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
     const isSubAgent = spawn !== null || subAgentKind(thread) !== null;
     const node: GraphNode = {
       id: threadNodeId(thread.id),
-      type: isSubAgent ? 'subAgent' : 'agent',
+      type: isSubAgent ? 'subAgent' : 'session',
       label: threadLabel(thread),
       status: threadStatus(thread.status, loaded.has(thread.id)),
       depth: 1,
@@ -122,6 +152,21 @@ export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
         `Sub-agent ${thread.id} references parent thread ${spawn.parentThreadId}, which is not in the current thread page; it is attached to ZERO.`,
       );
     }
+    // A session that runs in an agent's workspace belongs to that agent.
+    const owningAgent = thread.cwd ? agentByCwd.get(normalizeCwd(thread.cwd)) : undefined;
+    if (owningAgent && !spawn) {
+      node.parentId = owningAgent.id;
+      node.depth = owningAgent.depth + 1;
+      edges.push({
+        id: `edge:runsIn:${thread.id}`,
+        source: node.id,
+        target: owningAgent.id,
+        relationship: 'runsIn',
+        status: node.status,
+      });
+      continue;
+    }
+
     const kind = subAgentKind(thread);
     edges.push({
       id: `edge:orchestrates:${thread.id}`,
@@ -350,6 +395,14 @@ export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
       notes.push(`ZERO API unavailable: ${capability.method} (${capability.error ?? 'error'})`);
     }
   }
+  notes.push(...summarizeClassifications(snapshot.agentRegistry.repositories));
+  if (snapshot.agentRegistry.error) {
+    notes.push(`Agent registry unavailable: ${snapshot.agentRegistry.error}`);
+  } else if (snapshot.agents.length === 0) {
+    notes.push(
+      `No agent repositories found under ${snapshot.agentRegistry.root || '(unset agent root)'}.`,
+    );
+  }
   if (snapshot.mcpServers.length === 0) {
     notes.push('ZERO reports no MCP servers — no tool nodes exist.');
   }
@@ -360,6 +413,31 @@ export function buildGraph(snapshot: ZeroSnapshot | null): GraphModel {
   zeroNode.status = nodes.some((node) => node.status === 'active') ? 'active' : 'idle';
 
   return { nodes, edges, notes };
+}
+
+function agentMetadata(agent: ZeroAgent): GraphNode['metadata'] {
+  const metadata: GraphNode['metadata'] = {
+    agentId: agent.id,
+    workspace: agent.cwd,
+    enabled: agent.enabled,
+    callable: agent.callable,
+    invocationMethod: agent.invocationMethod,
+    classification: agent.classification,
+    classifiedBecause: agent.classificationReason,
+    registrySource: agent.source,
+  };
+  if (agent.role) metadata['role'] = agent.role;
+  if (agent.capabilities?.length) metadata['capabilities'] = agent.capabilities;
+  if (agent.inputs?.length) metadata['inputs'] = agent.inputs;
+  if (agent.outputs?.length) metadata['outputs'] = agent.outputs;
+  if (agent.repository) metadata['repository'] = agent.repository;
+  if (agent.branch) metadata['branch'] = agent.branch;
+  if (agent.hasInstructions !== undefined) metadata['agentInstructions'] = agent.hasInstructions;
+  return metadata;
+}
+
+function normalizeCwd(cwd: string): string {
+  return cwd.replace(/\/+$/, '');
 }
 
 function threadLabel(thread: Thread): string {

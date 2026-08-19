@@ -23,10 +23,16 @@ export const NODE_PALETTE: Record<NodeType, NodePalette> = {
     rimActive: 'rgba(255, 255, 255, 0.9)',
   },
   agent: {
-    coreInner: '#0a0c12',
+    coreInner: '#0b0d15',
     coreOuter: '#000000',
-    rim: 'rgba(226, 232, 246, 0.5)',
-    rimActive: 'rgba(255, 255, 255, 0.88)',
+    rim: 'rgba(238, 240, 252, 0.6)',
+    rimActive: 'rgba(255, 255, 255, 0.95)',
+  },
+  session: {
+    coreInner: '#090b10',
+    coreOuter: '#000000',
+    rim: 'rgba(214, 222, 240, 0.4)',
+    rimActive: 'rgba(250, 252, 255, 0.86)',
   },
   subAgent: {
     coreInner: '#080a10',

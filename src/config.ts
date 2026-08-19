@@ -20,6 +20,28 @@ export interface BrainInterfaceConfig {
   refreshIntervalMs: number;
   /** Fullscreen background asset. */
   backgroundImage: string;
+  /** Where ZERO finds the agent repositories it can address. */
+  agents: {
+    /** Directory that holds the agent repositories (scanned through ZERO). */
+    root: string;
+    /** Optional manifest with ids/roles/capabilities; defaults to <root>/zero-agents.json. */
+    manifestPath: string;
+    /** Sandbox policy used for the read-only discovery command. */
+    execSandbox: 'readOnly' | 'externalSandbox' | 'workspaceWrite';
+    /** Sandbox mode for agent threads ZERO starts. */
+    threadSandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
+    /** cwd of the thread ZERO uses to route a request to an agent. */
+    orchestratorCwd: string;
+    /** Hard timeout for a single agent invocation. */
+    invokeTimeoutMs: number;
+    /** Timeout for ZERO's routing decision. */
+    routeTimeoutMs: number;
+  };
+  speech: {
+    /** Speech-to-text provider for microphone input. */
+    provider: 'web-speech' | 'none';
+    language: string;
+  };
   voice: {
     provider: 'zero-realtime' | 'speech-synthesis' | 'none';
     /** Substring match against `speechSynthesis.getVoices()` names. */
@@ -64,6 +86,18 @@ function readList(env: EnvRecord, key: string): string[] {
 }
 
 export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
+  const agentRoot = readString(env, 'VITE_ZERO_AGENT_ROOT', '');
+  const execSandboxRaw = readString(env, 'VITE_ZERO_EXEC_SANDBOX', 'readOnly');
+  const execSandbox =
+    execSandboxRaw === 'externalSandbox' || execSandboxRaw === 'workspaceWrite'
+      ? execSandboxRaw
+      : 'readOnly';
+  const threadSandboxRaw = readString(env, 'VITE_ZERO_AGENT_SANDBOX', 'read-only');
+  const threadSandbox =
+    threadSandboxRaw === 'workspace-write' || threadSandboxRaw === 'danger-full-access'
+      ? threadSandboxRaw
+      : 'read-only';
+  const speechRaw = readString(env, 'VITE_ZERO_SPEECH_PROVIDER', 'web-speech');
   const providerRaw = readString(env, 'VITE_ZERO_VOICE_PROVIDER', 'zero-realtime');
   const provider =
     providerRaw === 'speech-synthesis' || providerRaw === 'none' || providerRaw === 'zero-realtime'
@@ -83,6 +117,23 @@ export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
       'VITE_ZERO_BACKGROUND_IMAGE',
       '/assets/brain-background.jpg',
     ),
+    agents: {
+      root: agentRoot,
+      manifestPath: readString(
+        env,
+        'VITE_ZERO_AGENT_MANIFEST',
+        agentRoot ? `${agentRoot.replace(/\/+$/, '')}/zero-agents.json` : '',
+      ),
+      execSandbox,
+      threadSandbox,
+      orchestratorCwd: readString(env, 'VITE_ZERO_ORCHESTRATOR_CWD', agentRoot),
+      invokeTimeoutMs: Math.max(5_000, readNumber(env, 'VITE_ZERO_AGENT_TIMEOUT_MS', 180_000)),
+      routeTimeoutMs: Math.max(5_000, readNumber(env, 'VITE_ZERO_ROUTE_TIMEOUT_MS', 60_000)),
+    },
+    speech: {
+      provider: speechRaw === 'none' ? 'none' : 'web-speech',
+      language: readString(env, 'VITE_ZERO_SPEECH_LANGUAGE', 'de-DE'),
+    },
     voice: {
       provider,
       preferredVoices: readList(env, 'VITE_ZERO_VOICE_NAMES'),

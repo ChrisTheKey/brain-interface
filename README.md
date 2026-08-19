@@ -15,17 +15,38 @@ brain-interface   (this repository — data adapter + graph transform + renderin
 Browser
 ```
 
-ZERO sits in the geometric centre as the orchestrator. Around it the interface
-grows the entities ZERO actually reports — agents (threads), sub-agents,
-knowledge bases (skills), tool providers (MCP servers) with their tools and
-resources, and connectors (apps). Add an agent or a skill in ZERO and a node
-appears; remove it and the node disappears. Nothing in the interface is
-hardcoded to a fixed set of entities, and no production data is mocked.
+ZERO sits in the geometric centre as the orchestrator — and it is the
+operative centre, not just the visual one: it hears you, decides which of your
+agents is needed, starts a real thread in that agent's workspace, watches it
+work and answers with what came back.
+
+Around ZERO the interface grows the entities ZERO actually reports: your
+**agents** (the agent repositories ZERO can run a task in), sessions (ZERO
+threads), sub-agents, knowledge bases (skills), tool providers (MCP servers)
+with their tools and resources, and connectors (apps). Add an agent repository
+and a node appears; remove it and the node disappears. Nothing is hardcoded to
+a fixed set of entities, and no production data is mocked.
+
+```
+ I speak  →  microphone  →  speech-to-text  →  ZERO (routing turn, real agent roster)
+                                                  ↓
+                                       thread/start in the agent workspace
+                                                  ↓
+                                       turn/start  →  the agent works
+                                                  ↓
+                                    result  →  ZERO  →  voice output  →  I hear
+```
 
 ## Architecture
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
+| Agent registry | `src/zero/agentRegistry.ts` | Discovers the agent repositories through ZERO (`command/exec`), merges an optional manifest |
+| Classification | `src/zero/agentClassifier.ts` | Decides from evidence what a repository is: zero / interface / toolProvider / agent / library |
+| Invocation | `src/zero/agentRunner.ts` | Runs an agent for real: `thread/start` in its workspace + `turn/start`, with steps, errors, timeout and cleanup |
+| Routing | `src/zero/router.ts` | ZERO itself picks the agents, via a turn constrained by an `outputSchema` |
+| Conversation | `src/state/conversation.ts` | The state machine: idle → listening → processing → agentActive → speaking |
+| Speech input | `src/voice/speechInput.ts` | Microphone + speech-to-text provider, with a real input level meter |
 | Transport | `src/zero/client.ts` | One WebSocket to ZERO, `initialize`/`initialized` handshake, request/response correlation, notification fan-out, reconnect with backoff |
 | Protocol | `src/zero/protocol.ts` | Types mirrored from ZERO's generated schemas (`codex app-server generate-json-schema`) |
 | Adapter | `src/zero/adapter.ts` | Reads ZERO's entities, tracks live activity, records unavailable APIs instead of inventing data |
@@ -40,7 +61,10 @@ hardcoded to a fixed set of entities, and no production data is mocked.
 | Brain entity | ZERO API |
 | --- | --- |
 | ZERO itself | `initialize` (user agent), `account/read`, `config/read` |
-| Agents | `thread/list` with `sourceKinds: [cli, vscode, exec, appServer, unknown]` |
+| Agents (your repositories) | `command/exec` — read-only discovery + classification under `VITE_ZERO_AGENT_ROOT` |
+| Agent invocation | `thread/start` (cwd = agent workspace) + `turn/start`, `turn/interrupt`, `thread/unsubscribe` |
+| Agent selection | `turn/start` with `outputSchema` on the routing thread — ZERO decides, not the UI |
+| Sessions | `thread/list` with `sourceKinds: [cli, vscode, exec, appServer, unknown]` |
 | Sub-agents | `thread/list` with `sourceKinds: [subAgent, subAgentReview, subAgentCompact, subAgentThreadSpawn, subAgentOther]` |
 | Agent → sub-agent edge | `thread.source.subAgent.thread_spawn.parent_thread_id` |
 | Loaded / running agents | `thread/loaded/list`, `thread/status/changed` |
@@ -50,6 +74,24 @@ hardcoded to a fixed set of entities, and no production data is mocked.
 | Connectors | `app/list` (+ `app/list/updated`) |
 | Live activity | `turn/started`, `turn/completed`, `item/started`, `item/completed`, `thread/tokenUsage/updated`, `error` |
 | Voice | `thread/realtime/start`, `thread/realtime/appendText`, `thread/realtime/outputAudio/delta`, `thread/realtime/stop` |
+
+### What counts as an agent
+
+A repository is not an agent because of its name. `agentClassifier.ts` decides
+from evidence ZERO collected on disk:
+
+| Classification | Evidence | Drawn as an agent? |
+| --- | --- | --- |
+| `zero` | contains the ZERO runtime (`codex-rs/app-server`) | no — this *is* ZERO |
+| `toolProvider` | MCP server (`@modelcontextprotocol/*`, `mcpName`) | no — it is a tool ZERO uses |
+| `interface` | `index.html` + bundler config, no agent instructions | no — it is a frontend |
+| `agent` | ships `AGENTS.md` / `CLAUDE.md` / `.codex`, or has a runnable entrypoint | **yes** |
+| `library` | no entrypoint, no agent instructions | no |
+
+Everything that is *not* drawn as an agent is listed in the status line's data
+notes with its classification, so nothing disappears silently. A
+`zero-agents.json` manifest in the agent root overrides the heuristics and adds
+role, capabilities, inputs and outputs.
 
 ### Relationships that ZERO does not expose
 
@@ -159,6 +201,24 @@ Over that image the graph is deliberately **black**: every node is a black disc
 with a dark separation aura and a thin luminous rim, edges are drawn with a
 black underlay plus a fine light core, and a radial scrim darkens the image
 towards ZERO. Status is a small accent arc — never a coloured fill.
+
+## Speaking to ZERO
+
+The microphone is opened only on an explicit click. Then:
+
+1. `SpeechRecognition` (the browser's real STT engine) produces the transcript.
+2. A separate `MicrophoneMeter` reads the real input level — that is what the
+   listening animation reacts to, not a timer.
+3. The final transcript goes into the **same pipeline as typed input**
+   (`ConversationPipeline.handleTranscript`) — there is no separate voice path.
+4. ZERO routes it, the selected agents run, and ZERO's answer is spoken.
+
+States: `idle`, `listening`, `processing`, `agentActive`, `speaking`, `error` —
+each one a real system state, each with its own quiet mark on the ZERO node.
+Activating the microphone while ZERO speaks stops the output first (barge-in).
+
+If the browser has no SpeechRecognition engine, the microphone button is
+disabled and the text field next to it drives the identical pipeline.
 
 ## ZERO voice
 

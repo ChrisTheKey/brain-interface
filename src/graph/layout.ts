@@ -54,8 +54,9 @@ const DEFAULTS: Required<LayoutOptions> = {
 
 export const NODE_SIZES: Record<GraphNode['type'], number> = {
   zero: 54,
-  agent: 26,
-  subAgent: 20,
+  agent: 28,
+  session: 21,
+  subAgent: 18,
   mcpServer: 24,
   skill: 20,
   tool: 13,

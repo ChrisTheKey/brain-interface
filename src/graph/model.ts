@@ -8,7 +8,10 @@
 
 export type NodeType =
   | 'zero'
+  /** A real agent from the registry (an agent repository ZERO can run). */
   | 'agent'
+  /** A ZERO thread — a session that ran (or runs) in some workspace. */
+  | 'session'
   | 'subAgent'
   | 'skill'
   | 'mcpServer'
@@ -34,6 +37,10 @@ export interface GraphNode {
 }
 
 export type EdgeRelationship =
+  /** ZERO → agent: ZERO can start a thread in this agent's workspace. */
+  | 'agent'
+  /** session → agent: this thread runs in that agent's workspace. */
+  | 'runsIn'
   | 'orchestrates'
   | 'spawned'
   | 'review'
@@ -67,6 +74,10 @@ export const ZERO_NODE_ID = 'zero';
 
 export function threadNodeId(threadId: string): string {
   return `thread:${threadId}`;
+}
+
+export function agentNodeId(agentId: string): string {
+  return `agent:${agentId}`;
 }
 
 export function mcpServerNodeId(server: string): string {

@@ -16,6 +16,7 @@
  * `snapshot.capabilities` instead of being replaced with invented data.
  */
 import type { ZeroClient } from './client';
+import { loadAgents, type AgentRegistryResult, type ZeroAgent } from './agentRegistry';
 import {
   ZERO_METHODS,
   type Account,
@@ -58,6 +59,15 @@ export interface ZeroSnapshot {
     sandboxMode: string | null;
     agentRoles: string[];
     configuredMcpServers: string[];
+  };
+  /** The real agent repositories ZERO can address. */
+  agents: ZeroAgent[];
+  agentRegistry: {
+    source: AgentRegistryResult['source'];
+    root: string;
+    error?: string;
+    /** Every repository the scan classified, agents and non-agents alike. */
+    repositories: AgentRegistryResult['repositories'];
   };
   threads: Thread[];
   loadedThreadIds: string[];
@@ -132,7 +142,13 @@ export class ZeroDataAdapter {
 
   constructor(
     private readonly client: ZeroClient,
-    private readonly options: { extraCwds: string[]; threadLimit: number },
+    private readonly options: {
+      extraCwds: string[];
+      threadLimit: number;
+      agentRoot: string;
+      agentManifestPath: string;
+      execSandbox: 'readOnly' | 'externalSandbox' | 'workspaceWrite';
+    },
   ) {}
 
   get snapshot(): ZeroSnapshot | null {
@@ -201,8 +217,22 @@ export class ZeroDataAdapter {
       .filter((thread): thread is Thread => Boolean(thread?.id));
 
     const threads = dedupeThreads([...rootThreads, ...subAgentThreads, ...loadedThreads]);
+
+    const registry = await loadAgents(this.client, {
+      root: this.options.agentRoot,
+      manifestPath: this.options.agentManifestPath,
+      execSandbox: this.options.execSandbox,
+    });
+    capabilities.push({
+      method: 'command/exec (agent registry)',
+      ok: registry.error === undefined,
+      ...(registry.error ? { error: registry.error } : {}),
+    });
+
+    // Skills are scoped per workspace: scan the agents' workspaces too.
     const cwds = uniq([
       ...this.options.extraCwds,
+      ...registry.agents.map((agent) => agent.cwd),
       ...threads.map((thread) => thread.cwd).filter((cwd): cwd is string => Boolean(cwd)),
     ]);
 
@@ -228,6 +258,13 @@ export class ZeroDataAdapter {
         sandboxMode: stringOrNull(effectiveConfig['sandbox_mode']),
         agentRoles: keysOf(effectiveConfig['agent_roles']),
         configuredMcpServers: keysOf(effectiveConfig['mcp_servers']),
+      },
+      agents: registry.agents,
+      agentRegistry: {
+        source: registry.source,
+        root: registry.root,
+        repositories: registry.repositories,
+        ...(registry.error ? { error: registry.error } : {}),
       },
       threads,
       loadedThreadIds: loaded?.data ?? [],
