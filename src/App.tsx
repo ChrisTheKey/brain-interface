@@ -2,16 +2,24 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { BrainStage } from './ui/BrainStage';
 import { DetailPanel } from './ui/DetailPanel';
 import { NodeTooltip } from './ui/NodeTooltip';
+import { OperatorPanel } from './ui/OperatorPanel';
 import { StatusBar } from './ui/StatusBar';
 import { VoiceBar } from './ui/VoiceBar';
 import { useZeroBrain } from './state/useZeroBrain';
 import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
+import { useOperator } from './state/useOperator';
+import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
 import type { GraphNode } from './graph/model';
 import type { ZeroAgent } from './zero/agentRegistry';
 import type { GraphRuntime } from './graph/transform';
 
 export default function App(): React.JSX.Element {
+  // Same origin: the gateway on port 3000 proxies /api and /ws to HWD-ZERO on
+  // loopback, so the operator needs no address and no credential here.
+  const [operatorClient] = useState(() => new HwdZeroClient());
+  const operator = useOperator(operatorClient);
+
   // Runtime facts about agent runs feed back into the graph, so an agent node
   // is `active` exactly while its ZERO thread runs.
   const [runtime, setRuntime] = useState<GraphRuntime>({});
@@ -106,6 +114,7 @@ export default function App(): React.JSX.Element {
         onSelect={handleSelect}
         onHover={handleHover}
       />
+      <OperatorPanel operator={operator} />
       <NodeTooltip node={hovered.node} position={hovered.position} />
       <DetailPanel
         node={selectedNode}

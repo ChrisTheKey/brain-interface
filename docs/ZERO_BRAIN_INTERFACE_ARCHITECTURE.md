@@ -96,6 +96,33 @@ cookie or `?token=`). `POST /api/gateway/session` exchanges the token for a
 cookie so the phone stays paired. Requests are rate limited per client address.
 The token is never part of the frontend bundle.
 
+## The operator's API
+
+HWD-ZERO serves it with `zero serve` (`zero/api/` in that repository); the
+interface reads it through the gateway, same origin, no address and no
+credential in the bundle. `src/hwd/client.ts` is the whole client surface.
+
+| Method | Path | Used for |
+| --- | --- | --- |
+| GET | `/api/state` | brain revision, mission counts, SAFE_MODE |
+| GET | `/api/agents` | `agents/registry.yaml`, verbatim |
+| GET | `/api/tasks` | contracts that can be started, and their gates |
+| GET | `/api/missions`, `/api/missions/<id>/journal` | mission list and audit trail |
+| GET | `/api/approvals` | gates a mission is genuinely stopped on |
+| GET | `/ws/events` | the live stream |
+| POST | `/api/missions` | start a mission from a contract ZERO holds |
+| POST | `/api/approvals` → `/api/approvals/<id>/grant` | mint and redeem one approval ticket |
+| POST | `/api/control/safe-mode` | the kill switch |
+
+### Approvals
+
+The interface cannot approve anything by asserting it. It asks the operator for
+a ticket bound to that mission, that gate and a digest of exactly what the human
+was shown, then redeems that one ticket — single use, expiring, re-checked
+server-side. A grant clears one gate for one resume; it never edits contract
+permissions, so the same action asks again next time. There is no deny button:
+an unapproved gate stays closed, because denial is the default.
+
 ## Event contract
 
 The interface consumes these events from `/ws/events` and renders them as ZERO

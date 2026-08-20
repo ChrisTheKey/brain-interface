@@ -410,3 +410,214 @@ body,
   flex: 1;
   min-width: 0;
 }
+
+/*
+ * The operator's edge. It sits at the left rim of the brain, deliberately
+ * quiet — until a gate opens, which is the one moment a human is required and
+ * the one element allowed to demand attention.
+ */
+.operator {
+  position: absolute;
+  z-index: 3;
+  top: 24px;
+  left: 24px;
+  width: min(288px, 32vw);
+  /* Never taller than the viewport: the brain has to stay visible behind it. */
+  max-height: calc(100vh - 132px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+.operator-safe {
+  border-color: rgba(255, 160, 150, 0.5);
+}
+
+.operator header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.operator-name {
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.operator-offline {
+  margin: 0;
+  color: var(--warn);
+}
+
+.operator code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: 'SF Mono', ui-monospace, monospace;
+}
+
+.missions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.missions li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--ink-dim);
+}
+
+.mission-id {
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.mission-task {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-status {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.mission-running {
+  color: var(--ink);
+}
+
+.mission-running .mission-status {
+  color: rgba(150, 220, 255, 0.95);
+}
+
+.mission-done .mission-status {
+  color: rgba(140, 230, 190, 0.85);
+}
+
+.mission-gate .mission-status,
+.mission-stopped .mission-status {
+  color: var(--warn);
+}
+
+.approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.approval {
+  padding: 12px;
+  border: 1px solid rgba(255, 170, 140, 0.45);
+  border-radius: 10px;
+  background: rgba(40, 14, 12, 0.55);
+}
+
+.approval h3 {
+  margin: 0 0 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 205, 180, 0.95);
+}
+
+.approval-mission {
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0;
+  opacity: 0.6;
+}
+
+.approval p {
+  margin: 0 0 6px;
+}
+
+.approval-reason,
+.approval-rationale {
+  color: var(--ink-dim);
+}
+
+.approval-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.approval-actions button {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 190, 160, 0.6);
+  border-radius: 8px;
+  background: rgba(255, 150, 110, 0.14);
+  color: rgba(255, 220, 200, 0.96);
+  font: inherit;
+  cursor: pointer;
+}
+
+.approval-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.approval-note {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.kill-switch {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.kill-switch:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: rgba(255, 160, 150, 0.5);
+}
+
+.kill-switch-on {
+  border-color: rgba(255, 160, 150, 0.7);
+  background: rgba(255, 90, 70, 0.18);
+  color: rgba(255, 210, 200, 0.96);
+}
+
+.kill-switch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .operator {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: 42vh;
+  }
+}
