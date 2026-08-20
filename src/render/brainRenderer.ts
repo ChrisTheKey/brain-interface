@@ -13,7 +13,7 @@
 import type { GraphEdge, GraphModel } from '../graph/model';
 import type { BrainLayout, LayoutNode } from '../graph/layout';
 import type { AudioLevels } from '../audio/analyser';
-import { NODE_PALETTE, STATUS_ACCENT } from './palette';
+import { glowColorFor, NODE_PALETTE, rimColorFor, STATUS_ACCENT } from './palette';
 import { drawFilaments } from './filaments';
 import type { SmokeField } from './smoke';
 
@@ -210,11 +210,13 @@ function drawNode(
 
   if (radius < 0.6) return;
 
-  // Dark aura: lifts the black disc off the background image.
+  // Dark aura: lifts the black disc off the background image. While an agent
+  // is really running, its department colour bleeds into the aura.
   const auraRadius = radius * 2.6;
   const aura = ctx.createRadialGradient(x, y, radius * 0.5, x, y, auraRadius);
+  const departmentGlow = pulse > 0.05 ? glowColorFor(layoutNode.node, pulse * 0.35) : undefined;
   aura.addColorStop(0, `rgba(0, 0, 0, ${(0.85 * appear).toFixed(3)})`);
-  aura.addColorStop(0.6, `rgba(0, 0, 0, ${(0.45 * appear).toFixed(3)})`);
+  aura.addColorStop(0.6, departmentGlow ?? `rgba(0, 0, 0, ${(0.45 * appear).toFixed(3)})`);
   aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
   ctx.fillStyle = aura;
   ctx.beginPath();
@@ -237,8 +239,10 @@ function drawNode(
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = hovered || selected ? palette.rimActive : palette.rim;
-  ctx.lineWidth = (selected ? 1.8 : hovered ? 1.4 : 0.9) * Math.max(0.7, scale);
+  const departmentRim = rimColorFor(layoutNode.node, hovered || selected || pulse > 0.05);
+  ctx.strokeStyle =
+    departmentRim ?? (hovered || selected ? palette.rimActive : palette.rim);
+  ctx.lineWidth = (selected ? 2 : hovered ? 1.5 : 1) * Math.max(0.7, scale);
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.stroke();

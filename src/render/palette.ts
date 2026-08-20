@@ -1,4 +1,5 @@
-import type { NodeStatus, NodeType } from '../graph/model';
+import type { GraphNode, NodeStatus, NodeType } from '../graph/model';
+import { DEPARTMENT_COLORS, type Department } from '../zero/agentPolicy';
 
 export interface NodePalette {
   /** Inner colour of the disc — every node is black; only the sheen differs. */
@@ -77,6 +78,31 @@ export const NODE_PALETTE: Record<NodeType, NodePalette> = {
     rimActive: 'rgba(240, 240, 246, 0.75)',
   },
 };
+
+/**
+ * A child agent's rim carries its department colour. The body stays black, so
+ * the palette reads as eight distinguishable accents on dark tissue rather
+ * than as a coloured dashboard.
+ */
+export function rimColorFor(node: GraphNode, active: boolean): string | undefined {
+  const department = node.metadata['department'];
+  if (typeof department !== 'string') return undefined;
+  const base = DEPARTMENT_COLORS[department as Department];
+  if (!base) return undefined;
+  return withAlpha(base, active ? 0.95 : 0.62);
+}
+
+/** Same colour, dimmer, for the halo around an active agent. */
+export function glowColorFor(node: GraphNode, alpha: number): string | undefined {
+  const department = node.metadata['department'];
+  if (typeof department !== 'string') return undefined;
+  const base = DEPARTMENT_COLORS[department as Department];
+  return base ? withAlpha(base, alpha) : undefined;
+}
+
+function withAlpha(rgba: string, alpha: number): string {
+  return rgba.replace(/rgba\(([^)]+),\s*[\d.]+\)/, `rgba($1, ${alpha.toFixed(3)})`);
+}
 
 /** Status is a small accent arc, not a fill — it must stay quiet. */
 export const STATUS_ACCENT: Record<NodeStatus, string> = {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildDiscoveryScript, loadAgents, parseDiscoveryOutput } from '../src/zero/agentRegistry';
+import { CHILD_AGENTS, EXCLUDED_REPOSITORIES } from '../src/zero/agentPolicy';
 import type { ZeroClient } from '../src/zero/client';
 
 const SEP = '\u0001';
@@ -7,7 +8,7 @@ const SEP = '\u0001';
 /** Mirrors ZERO's scan output: name, cwd, remote, branch, headline, then evidence. */
 function scanLine(options: {
   name: string;
-  cwd: string;
+  cwd?: string;
   remote?: string;
   branch?: string;
   headline?: string;
@@ -22,7 +23,7 @@ function scanLine(options: {
   const flag = (value?: boolean): string => (value ? 'yes' : 'no');
   return [
     options.name,
-    options.cwd,
+    options.cwd ?? `/ws/${options.name}`,
     options.remote ?? '',
     options.branch ?? '',
     options.headline ?? '',
@@ -36,105 +37,143 @@ function scanLine(options: {
   ].join(SEP);
 }
 
-describe('agent registry discovery', () => {
-  it('parses the repository scan ZERO returns and keeps only real agents', () => {
-    const stdout = [
-      '__SCAN__',
+/** A workspace that contains everything: agents, system repos, excluded repos. */
+function fullWorkspaceScan(): string {
+  return [
+    '__SCAN__',
+    ...CHILD_AGENTS.map((agent) =>
       scanLine({
-        name: 'Meta-Agent',
-        cwd: '/home/me/agents/Meta-Agent',
-        remote: 'https://github.com/me/Meta-Agent',
+        name: agent.repo,
+        remote: `https://github.com/ChrisTheKey/${agent.repo}`,
         branch: 'main',
-        headline: 'Builds other agents',
         instructions: true,
       }),
-      // A frontend and the ZERO runtime must not become agent nodes.
-      scanLine({ name: 'brain-interface', cwd: '/home/me/agents/brain-interface', frontend: true }),
-      scanLine({ name: 'HWD-ZERO', cwd: '/home/me/agents/HWD-ZERO', zero: true }),
-      // No entrypoint, no instructions → not an agent either.
-      scanLine({ name: 'notes', cwd: '/home/me/agents/notes' }),
-    ].join('\n');
+    ),
+    scanLine({ name: 'HWD-ZERO', zero: true, entry: true }),
+    scanLine({ name: 'brain-interface', frontend: true, entry: true }),
+    ...EXCLUDED_REPOSITORIES.map((repo) =>
+      // Deliberately "agent-looking": instructions and an entrypoint. The
+      // exclusion must still win.
+      scanLine({ name: repo, instructions: true, entry: true }),
+    ),
+  ].join('\n');
+}
 
-    const result = parseDiscoveryOutput(stdout, '/home/me/agents');
-    expect(result.source).toBe('scan');
-    expect(result.agents.map((agent) => agent.id)).toEqual(['Meta-Agent']);
+describe('agent registry discovery', () => {
+  it('registers exactly the eight child agents of HWD-ZERO', () => {
+    const result = parseDiscoveryOutput(fullWorkspaceScan(), '/ws');
+
+    expect(result.agents.map((agent) => agent.id).sort()).toEqual(
+      [
+        'agent_installer',
+        'funnel',
+        'google_reviews',
+        'insta',
+        'lead_scraper',
+        'meta',
+        'seo',
+        'website_outreach',
+      ].sort(),
+    );
+    expect(result.agents).toHaveLength(8);
     expect(result.agents[0]).toMatchObject({
-      name: 'Meta-Agent',
-      cwd: '/home/me/agents/Meta-Agent',
-      repository: 'https://github.com/me/Meta-Agent',
-      branch: 'main',
-      description: 'Builds other agents',
-      hasInstructions: true,
+      cwd: expect.stringContaining('/ws/'),
       enabled: true,
       callable: true,
-      source: 'scan',
       classification: 'agent',
+      source: 'scan',
     });
-    expect(result.repositories.map((entry) => entry.classification).sort()).toEqual([
-      'agent',
-      'interface',
-      'library',
-      'zero',
-    ]);
+    // Every agent carries its department and its approval-gated capabilities.
+    for (const agent of result.agents) {
+      expect(agent.department).toBeTruthy();
+      expect(agent.requiresApprovalFor?.length).toBeGreaterThan(0);
+      expect(agent.invocationMethod).toContain('thread/start');
+    }
   });
 
-  it('prefers the manifest and enriches it with what only disk knows', () => {
+  it.each(EXCLUDED_REPOSITORIES)('never registers %s', (repo) => {
+    const result = parseDiscoveryOutput(fullWorkspaceScan(), '/ws');
+    expect(result.agents.some((agent) => agent.name === repo)).toBe(false);
+    expect(result.agents.some((agent) => agent.cwd.endsWith(`/${repo}`))).toBe(false);
+    // It is not silently dropped either: it is reported as excluded.
+    expect(result.excluded).toContain(repo);
+    // And it never even reaches the classifier output.
+    expect(result.repositories.some((entry) => entry.name === repo)).toBe(false);
+  });
+
+  it('never registers HWD-ZERO or brain-interface as child agents', () => {
+    const result = parseDiscoveryOutput(fullWorkspaceScan(), '/ws');
+    expect(result.agents.some((agent) => agent.cwd.endsWith('/HWD-ZERO'))).toBe(false);
+    expect(result.agents.some((agent) => agent.cwd.endsWith('/brain-interface'))).toBe(false);
+    const classifications = new Map(
+      result.repositories.map((entry) => [entry.name, entry.classification]),
+    );
+    expect(classifications.get('HWD-ZERO')).toBe('zero');
+    expect(classifications.get('brain-interface')).toBe('interface');
+  });
+
+  it('does not register a repository just because it looks like an agent', () => {
+    const stdout = [
+      '__SCAN__',
+      scanLine({ name: 'Some-Random-Agent', instructions: true, entry: true }),
+    ].join('\n');
+    const result = parseDiscoveryOutput(stdout, '/ws');
+    expect(result.agents).toEqual([]);
+  });
+
+  it('takes ids, display names and departments from the policy, not from the folder', () => {
+    const stdout = ['__SCAN__', scanLine({ name: 'Meta-Agent', instructions: true })].join('\n');
+    const result = parseDiscoveryOutput(stdout, '/ws');
+    expect(result.agents[0]).toMatchObject({
+      id: 'meta',
+      name: 'Meta Agent',
+      department: 'orchestration',
+    });
+  });
+
+  it('lets a manifest add metadata but never resurrect an excluded repository', () => {
     const manifest = JSON.stringify({
       agents: [
         {
           id: 'seo',
           name: 'SEO',
+          cwd: '/ws/SEO',
           role: 'analyst',
-          cwd: '/home/me/agents/SEO',
           capabilities: ['audit', 'keywords'],
-          inputs: ['url'],
-          outputs: ['report'],
         },
-        { id: 'disabled-one', name: 'Funnel', cwd: '/home/me/agents/Funnel', enabled: false },
+        // An operator mistake: an excluded repository declared as an agent.
+        { id: 'website_building', name: 'Website-Building', cwd: '/ws/Website-Building' },
       ],
     });
     const stdout = [
       '__MANIFEST__',
       manifest,
       '__SCAN__',
-      scanLine({
-        name: 'SEO',
-        cwd: '/home/me/agents/SEO',
-        remote: 'https://github.com/me/SEO',
-        branch: 'main',
-        headline: 'SEO agent',
-        instructions: true,
-      }),
-      scanLine({ name: 'Funnel', cwd: '/home/me/agents/Funnel', remote: 'https://github.com/me/Funnel', branch: 'main' }),
+      scanLine({ name: 'SEO', remote: 'https://github.com/me/SEO', branch: 'main', instructions: true }),
+      scanLine({ name: 'Website-Building', instructions: true }),
     ].join('\n');
 
-    const result = parseDiscoveryOutput(stdout, '/home/me/agents');
+    const result = parseDiscoveryOutput(stdout, '/ws');
     expect(result.source).toBe('manifest');
+    expect(result.agents.map((agent) => agent.id)).toEqual(['seo']);
     expect(result.agents[0]).toMatchObject({
-      id: 'seo',
       role: 'analyst',
       capabilities: ['audit', 'keywords'],
+      department: 'seo',
       repository: 'https://github.com/me/SEO',
       branch: 'main',
-      hasInstructions: true,
     });
-    expect(result.agents[1]?.enabled).toBe(false);
-  });
-
-  it('exposes the invocation method ZERO really uses', () => {
-    const stdout = ['__SCAN__', scanLine({ name: 'SEO', cwd: '/a/SEO', instructions: true })].join('\n');
-    const result = parseDiscoveryOutput(stdout, '/a');
-    expect(result.agents[0]?.invocationMethod).toContain('thread/start');
+    expect(result.excluded).toContain('Website-Building');
   });
 
   it('reports an empty registry instead of inventing agents', () => {
-    const result = parseDiscoveryOutput('__SCAN__\n', '/home/me/agents');
+    const result = parseDiscoveryOutput('__SCAN__\n', '/ws');
     expect(result.agents).toEqual([]);
     expect(result.source).toBe('none');
   });
 
   it('quotes the root so paths with spaces or quotes stay safe', () => {
-    const script = buildDiscoveryScript("/home/me/my agents", "/home/me/it's/zero-agents.json");
+    const script = buildDiscoveryScript('/home/me/my agents', "/home/me/it's/zero-agents.json");
     expect(script).toContain("'/home/me/my agents'");
     expect(script).toContain(`'/home/me/it'\\''s/zero-agents.json'`);
   });
@@ -147,8 +186,8 @@ describe('agent registry discovery', () => {
     } as unknown as ZeroClient;
 
     const result = await loadAgents(client, {
-      root: '/home/me/agents',
-      manifestPath: '/home/me/agents/zero-agents.json',
+      root: '/ws',
+      manifestPath: '/ws/zero-agents.json',
       execSandbox: 'readOnly',
     });
     expect(result.agents).toEqual([]);
@@ -158,11 +197,7 @@ describe('agent registry discovery', () => {
   it('does not call ZERO at all when no agent root is configured', async () => {
     const request = vi.fn();
     const client = { request } as unknown as ZeroClient;
-    const result = await loadAgents(client, {
-      root: '',
-      manifestPath: '',
-      execSandbox: 'readOnly',
-    });
+    const result = await loadAgents(client, { root: '', manifestPath: '', execSandbox: 'readOnly' });
     expect(request).not.toHaveBeenCalled();
     expect(result.error).toContain('VITE_ZERO_AGENT_ROOT');
   });

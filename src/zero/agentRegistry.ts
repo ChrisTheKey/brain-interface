@@ -18,6 +18,12 @@
  */
 import type { ZeroClient } from './client';
 import {
+  childAgentForId,
+  childAgentForRepo,
+  isExcludedRepository,
+  type Department,
+} from './agentPolicy';
+import {
   classifyRepository,
   type ClassifiedRepository,
   type RepositoryClassification,
@@ -50,6 +56,10 @@ export interface ZeroAgent {
   callable: boolean;
   /** How ZERO invokes it — the real mechanism, not a label. */
   invocationMethod: string;
+  /** Business department, from the operator's agent policy. */
+  department?: Department;
+  /** Capabilities that always require explicit human approval. */
+  requiresApprovalFor?: string[];
 }
 
 export interface AgentRegistryResult {
@@ -57,6 +67,8 @@ export interface AgentRegistryResult {
   agents: ZeroAgent[];
   /** Everything the scan found, including non-agents, with the reason. */
   repositories: ClassifiedRepository[];
+  /** Repositories the policy blocks outright (never rendered, never routed). */
+  excluded: string[];
   source: 'manifest' | 'scan' | 'none';
   /** Human-readable reason when discovery could not run. */
   error?: string;
@@ -123,6 +135,7 @@ export async function loadAgents(
     return {
       agents: [],
       repositories: [],
+      excluded: [],
       source: 'none',
       root: '',
       error: 'VITE_ZERO_AGENT_ROOT is not set — ZERO was not told where the agents live.',
@@ -142,6 +155,7 @@ export async function loadAgents(
     return {
       agents: [],
       repositories: [],
+      excluded: [],
       source: 'none',
       root: options.root,
       error: error instanceof Error ? error.message : String(error),
@@ -152,6 +166,7 @@ export async function loadAgents(
     return {
       agents: [],
       repositories: [],
+      excluded: [],
       source: 'none',
       root: options.root,
       error: `agent discovery exited with ${response.exitCode}: ${response.stderr.slice(0, 200)}`,
@@ -171,13 +186,21 @@ export function parseDiscoveryOutput(stdout: string, root: string): AgentRegistr
       : '';
   const scanText = scanStart >= 0 ? stdout.slice(scanStart + '__SCAN__'.length) : stdout;
 
-  const repositories = parseScan(scanText).map((entry) => ({
+  const scanned = parseScan(scanText);
+  // Hard exclusion first: these repositories never reach the classifier, the
+  // graph, the routing roster or the invocation layer.
+  const excluded = scanned.filter((entry) => isExcludedRepository(entry.name)).map((entry) => entry.name);
+  const repositories = scanned
+    .filter((entry) => !isExcludedRepository(entry.name))
+    .map((entry) => ({
     ...classifyRepository(entry),
     ...(entry.repository ? { repository: entry.repository } : {}),
     ...(entry.branch ? { branch: entry.branch } : {}),
     ...(entry.description ? { description: entry.description } : {}),
   }));
-  const manifest = parseManifest(manifestText);
+  const manifest = parseManifest(manifestText).filter(
+    (entry) => !isExcludedRepository(entry.name) && !isExcludedRepository(basename(entry.cwd)),
+  );
   const byPath = new Map(repositories.map((entry) => [normalizePath(entry.cwd), entry]));
   const byName = new Map(repositories.map((entry) => [entry.name.toLowerCase(), entry]));
 
@@ -186,8 +209,15 @@ export function parseDiscoveryOutput(stdout: string, root: string): AgentRegistr
     // facts. An operator declaration outranks the classifier heuristics.
     const agents = manifest.map((entry): ZeroAgent => {
       const match = byPath.get(normalizePath(entry.cwd)) ?? byName.get(entry.name.toLowerCase());
+      const definition = childAgentForId(entry.id) ?? childAgentForRepo(entry.name);
       return {
         ...entry,
+        ...(definition
+          ? {
+              department: definition.department,
+              requiresApprovalFor: [...definition.requiresApprovalFor],
+            }
+          : {}),
         ...(entry.repository ?? match?.repository
           ? { repository: entry.repository ?? match?.repository }
           : {}),
@@ -198,28 +228,33 @@ export function parseDiscoveryOutput(stdout: string, root: string): AgentRegistr
           : 'declared in the manifest',
       };
     });
-    return { agents, repositories, source: 'manifest', root };
+    return { agents, repositories, excluded, source: 'manifest', root };
   }
 
-  const agents: ZeroAgent[] = repositories
-    .filter((entry) => entry.classification === 'agent')
-    .map((entry) => ({
-      id: entry.name,
-      name: entry.name,
+  const agents: ZeroAgent[] = [];
+  for (const entry of repositories) {
+    const definition = childAgentForRepo(entry.name);
+    if (!definition) continue;
+    agents.push({
+      id: definition.id,
+      name: definition.displayName,
       cwd: entry.cwd,
       enabled: true,
-      source: 'scan' as const,
-      classification: entry.classification,
-      classificationReason: entry.reason,
-      callable: entry.callable,
+      source: 'scan',
+      classification: 'agent',
+      classificationReason: `child agent of HWD-ZERO (${entry.reason})`,
+      callable: true,
       invocationMethod: INVOCATION_METHOD,
+      department: definition.department,
+      requiresApprovalFor: [...definition.requiresApprovalFor],
       hasInstructions: entry.agentInstructions,
       ...(entry.repository ? { repository: entry.repository } : {}),
       ...(entry.branch ? { branch: entry.branch } : {}),
       ...(entry.description ? { description: entry.description } : {}),
-    }));
+    });
+  }
 
-  return { agents, repositories, source: agents.length > 0 ? 'scan' : 'none', root };
+  return { agents, repositories, excluded, source: agents.length > 0 ? 'scan' : 'none', root };
 }
 
 function parseManifest(text: string): ZeroAgent[] {

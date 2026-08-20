@@ -16,7 +16,7 @@ function snapshot(partial: Partial<ZeroSnapshot> = {}): ZeroSnapshot {
       configuredMcpServers: [],
     },
     agents: [],
-    agentRegistry: { source: 'none', root: '/workspace', repositories: [] },
+    agentRegistry: { source: 'none', root: '/workspace', repositories: [], excluded: [] },
     threads: [],
     loadedThreadIds: [],
     skills: [],
@@ -279,6 +279,7 @@ describe('ZERO runtime repository', () => {
         agentRegistry: {
           source: 'scan',
           root: '/agents',
+          excluded: [],
           repositories: [
             {
               name: 'HWD-ZERO',

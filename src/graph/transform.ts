@@ -435,6 +435,11 @@ export function buildGraph(
     }
   }
   notes.push(...summarizeClassifications(snapshot.agentRegistry.repositories));
+  if (snapshot.agentRegistry.excluded.length > 0) {
+    notes.push(
+      `Excluded by policy (never registered, never routed): ${snapshot.agentRegistry.excluded.join(', ')}.`,
+    );
+  }
   if (snapshot.agentRegistry.error) {
     notes.push(`Agent registry unavailable: ${snapshot.agentRegistry.error}`);
   } else if (snapshot.agents.length === 0) {
@@ -457,6 +462,7 @@ export function buildGraph(
 function agentMetadata(agent: ZeroAgent): GraphNode['metadata'] {
   const metadata: GraphNode['metadata'] = {
     agentId: agent.id,
+    parent: 'HWD-ZERO',
     workspace: agent.cwd,
     enabled: agent.enabled,
     callable: agent.callable,
@@ -465,6 +471,10 @@ function agentMetadata(agent: ZeroAgent): GraphNode['metadata'] {
     classifiedBecause: agent.classificationReason,
     registrySource: agent.source,
   };
+  if (agent.department) metadata['department'] = agent.department;
+  if (agent.requiresApprovalFor?.length) {
+    metadata['requiresApprovalFor'] = agent.requiresApprovalFor;
+  }
   if (agent.role) metadata['role'] = agent.role;
   if (agent.capabilities?.length) metadata['capabilities'] = agent.capabilities;
   if (agent.inputs?.length) metadata['inputs'] = agent.inputs;

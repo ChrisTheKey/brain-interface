@@ -9,6 +9,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "gateway": "node server/gateway.mjs",
+    "gateway:lan": "ZERO_LAN_MODE=true node server/gateway.mjs",
     "typecheck": "tsc -b --force",
     "lint": "eslint .",
     "test": "vitest run",

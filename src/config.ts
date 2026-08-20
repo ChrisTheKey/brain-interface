@@ -115,7 +115,7 @@ export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
     backgroundImage: readString(
       env,
       'VITE_ZERO_BACKGROUND_IMAGE',
-      '/assets/brain-background.jpg',
+      '/reference/red-background.jpg',
     ),
     agents: {
       root: agentRoot,

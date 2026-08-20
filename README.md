@@ -154,6 +154,57 @@ credential.
 | `VITE_ZERO_VOICE_SPEAK_AGENT_MESSAGES` | `false` | Speak ZERO's completed agent messages automatically |
 | `VITE_ZERO_VOICE_PROMPT` | built-in ZERO persona | Session prompt describing ZERO's voice character (realtime provider) |
 
+## The agent network
+
+The child agents of HWD-ZERO are fixed by policy (`src/zero/agentPolicy.ts`):
+
+| Agent | Repository | Department |
+| --- | --- | --- |
+| Autonomous Website Lead Scraper | `Autonomous-Website-Lead-Scraper` | acquisition |
+| Meta Agent | `Meta-Agent` | orchestration |
+| Auto Agent Install Helper | `Auto-Agent-Install-Helper` | infrastructure |
+| Google Bewertungen AI Agent | `Google-Bewertungen-AI-Agent` | reputation |
+| Insta Agent | `Insta-Agent` | social |
+| Autonomer Website Outreach Agent | `Autonomer-Website-Outreach-Agent` | outreach |
+| SEO | `SEO` | seo |
+| Funnel | `Funnel` | funnel |
+
+**Never registered:** `Website-Building`, `Loop-Engeneering`, `Prompt-Optimizer`,
+`more-available-tokens`. The exclusion is applied before classification, before
+the graph and before routing; a manifest cannot re-enable them. `HWD-ZERO` and
+`brain-interface` are recognised as runtime and interface, not as agents.
+
+Point `VITE_ZERO_AGENT_ROOT` at the workspace that holds these repositories:
+
+```
+ZERO-WORKSPACE/
+├── HWD-ZERO/
+├── brain-interface/
+├── Autonomous-Website-Lead-Scraper/
+├── Meta-Agent/
+└── …
+```
+
+## Laptop and Samsung Galaxy access
+
+The gateway is the single origin — port 3000 serves the interface, `/api` and
+`/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
+
+```bash
+scripts/setup-zero.sh        # once: install, build, create .env.local
+scripts/start-zero.sh        # laptop only  → http://127.0.0.1:3000
+scripts/start-zero-lan.sh    # laptop + phone (prints the real LAN URL + token)
+scripts/status-zero.sh       # what is actually up
+scripts/stop-zero.sh
+```
+
+`start-zero-lan.sh` checks RAM, port and HWD-ZERO reachability, then prints the
+**detected** LAN address — never an example IP. The phone opens that URL with
+the `?token=…` it prints; the token is generated on first run into
+`.zero/gateway-token` (0600, git-ignored) and is not part of the bundle.
+
+LAN access is deliberately the boundary: no tunnel, no UPnP, no port forwarding.
+
 ## Development
 
 ### 1. Start the ZERO backend

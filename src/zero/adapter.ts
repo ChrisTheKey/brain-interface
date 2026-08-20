@@ -68,6 +68,8 @@ export interface ZeroSnapshot {
     error?: string;
     /** Every repository the scan classified, agents and non-agents alike. */
     repositories: AgentRegistryResult['repositories'];
+    /** Repositories the policy blocks outright. */
+    excluded: string[];
   };
   threads: Thread[];
   loadedThreadIds: string[];
@@ -264,6 +266,7 @@ export class ZeroDataAdapter {
         source: registry.source,
         root: registry.root,
         repositories: registry.repositories,
+        excluded: registry.excluded,
         ...(registry.error ? { error: registry.error } : {}),
       },
       threads,
