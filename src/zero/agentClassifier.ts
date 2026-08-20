@@ -43,6 +43,12 @@ export interface RepositoryEvidence {
 }
 
 export interface ClassifiedRepository extends RepositoryEvidence {
+  /** Git remote of the checkout, when it has one. */
+  repository?: string;
+  /** Checked-out branch. */
+  branch?: string;
+  /** README headline, when the repository has one. */
+  description?: string;
   classification: RepositoryClassification;
   /** Why the classifier decided this — shown in the UI, never invented. */
   reason: string;

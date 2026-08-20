@@ -103,6 +103,10 @@ export class AgentRunner {
     }
 
     hooks.onThreadStarted?.(threadId);
+    // A run gets the agent's name, so its session node is readable at a glance.
+    void this.client
+      .request('thread/name/set', { threadId, name: `${agent.name} · run` })
+      .catch(() => undefined);
     this.active.set(threadId, { threadId, agentId: agent.id });
 
     try {

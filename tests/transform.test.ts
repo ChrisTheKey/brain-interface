@@ -271,3 +271,39 @@ describe('runtime agent state', () => {
     expect(node?.metadata['currentTask']).toBeUndefined();
   });
 });
+
+describe('ZERO runtime repository', () => {
+  it('couples the ZERO checkout to the ZERO node', () => {
+    const graph = buildGraph(
+      snapshot({
+        agentRegistry: {
+          source: 'scan',
+          root: '/agents',
+          repositories: [
+            {
+              name: 'HWD-ZERO',
+              cwd: '/agents/HWD-ZERO',
+              agentInstructions: false,
+              hasBin: false,
+              hasEntrypoint: true,
+              mcpServer: false,
+              frontend: false,
+              zeroRuntime: true,
+              classification: 'zero',
+              reason: 'contains the ZERO agent runtime',
+              callable: false,
+              repository: 'https://github.com/me/HWD-ZERO',
+              branch: 'main',
+            },
+          ],
+        },
+      }),
+    );
+    const zero = graph.nodes.find((node) => node.id === 'zero');
+    expect(zero?.metadata['runtimeWorkspace']).toBe('/agents/HWD-ZERO');
+    expect(zero?.metadata['runtimeRepository']).toBe('https://github.com/me/HWD-ZERO');
+    expect(zero?.metadata['runtimeBranch']).toBe('main');
+    // The runtime is never drawn as an agent.
+    expect(graph.nodes.filter((node) => node.type === 'agent')).toHaveLength(0);
+  });
+});

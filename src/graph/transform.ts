@@ -89,6 +89,22 @@ export function buildGraph(
   } else if (snapshot.zero.requiresOpenaiAuth) {
     zeroMeta['account'] = 'not signed in';
   }
+  // Couple ZERO's own repository to the ZERO node: the scan already knows
+  // which checkout carries the runtime, so ZERO shows where it runs from.
+  const runtimeRepos = snapshot.agentRegistry.repositories.filter(
+    (entry) => entry.classification === 'zero',
+  );
+  const runtimeCheckout = runtimeRepos[0];
+  if (runtimeCheckout) {
+    zeroMeta['runtimeWorkspace'] = runtimeCheckout.cwd;
+    if (runtimeCheckout.repository) zeroMeta['runtimeRepository'] = runtimeCheckout.repository;
+    if (runtimeCheckout.branch) zeroMeta['runtimeBranch'] = runtimeCheckout.branch;
+  }
+  if (runtimeRepos.length > 1) {
+    notes.push(
+      `More than one ZERO runtime checkout found: ${runtimeRepos.map((entry) => entry.name).join(', ')}.`,
+    );
+  }
   zeroMeta['threads'] = snapshot.threads.length;
   zeroMeta['loadedThreads'] = snapshot.loadedThreadIds.length;
 

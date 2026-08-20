@@ -72,7 +72,12 @@ describe('AgentRunner', () => {
       method: 'thread/start',
       params: { cwd: '/agents/SEO', sandbox: 'read-only' },
     });
+    // The run is named, then the task is handed over.
     expect(calls[1]).toMatchObject({
+      method: 'thread/name/set',
+      params: { threadId: 'thr_1', name: 'SEO · run' },
+    });
+    expect(calls[2]).toMatchObject({
       method: 'turn/start',
       params: { threadId: 'thr_1', input: [{ type: 'text', text: 'Audit example.com' }] },
     });

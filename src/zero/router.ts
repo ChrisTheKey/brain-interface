@@ -98,6 +98,12 @@ export async function routeTask(
   }
   if (!threadId) return { decision: null, error: 'ZERO did not return a routing thread' };
 
+  // Name it, so this internal thread does not show up in the brain labelled
+  // with the routing prompt itself.
+  void client
+    .request('thread/name/set', { threadId, name: 'ZERO · routing' })
+    .catch(() => undefined);
+
   try {
     const raw = await runDecisionTurn(client, threadId, transcript, agents, options);
     if (raw.error) return { decision: null, error: raw.error };

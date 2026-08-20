@@ -2,7 +2,7 @@
  * Canvas 2D renderer for the brain.
  *
  * Rendering order: background image (CSS layer, below the canvas) → scrim →
- * edges → smoke around ZERO → nodes → labels. The renderer owns no data: it
+ * neural filaments → edges → smoke around ZERO → nodes → labels. The renderer owns no data: it
  * draws the layout computed from ZERO's graph plus the transient activity
  * pulses the adapter reported.
  *
@@ -14,6 +14,7 @@ import type { GraphEdge, GraphModel } from '../graph/model';
 import type { BrainLayout, LayoutNode } from '../graph/layout';
 import type { AudioLevels } from '../audio/analyser';
 import { NODE_PALETTE, STATUS_ACCENT } from './palette';
+import { drawFilaments } from './filaments';
 import type { SmokeField } from './smoke';
 
 export interface ActivityPulse {
@@ -59,6 +60,17 @@ export function drawBrain(
   ctx.clearRect(0, 0, width, height);
 
   drawScrim(ctx, width, height, centerX, centerY, state);
+  // Tissue first, then the structural edges on top of it.
+  drawFilaments(
+    ctx,
+    centerX,
+    centerY,
+    scale,
+    state.graph,
+    state.layout,
+    state.pulses,
+    state.time,
+  );
   drawEdges(ctx, centerX, centerY, scale, state);
   smoke.draw(ctx, centerX, centerY, scale);
   drawNodes(ctx, centerX, centerY, scale, state);
