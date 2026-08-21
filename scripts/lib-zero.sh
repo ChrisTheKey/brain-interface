@@ -14,15 +14,45 @@ mkdir -p "$ZERO_PID_DIR"
 ZERO_WORKSPACE="${ZERO_WORKSPACE:-$(cd "$ZERO_ROOT/.." && pwd)}"
 ZERO_BRAIN_ROOT="${ZERO_BRAIN_ROOT:-$ZERO_WORKSPACE/HWD-ZERO}"
 ZERO_API_PORT="${ZERO_API_PORT:-8000}"
-ZERO_PYTHON="${ZERO_PYTHON:-python3}"
+# Termux installs the interpreter as `python`; most distributions as `python3`.
+if [ -z "${ZERO_PYTHON:-}" ]; then
+  if command -v python3 >/dev/null 2>&1; then ZERO_PYTHON=python3; else ZERO_PYTHON=python; fi
+fi
 
 zero_os() {
+  # Termux is Linux by uname but not by anything that matters here: no systemd,
+  # no /etc, its own prefix, and an OS that kills background processes when it
+  # wants memory. It gets its own answer so callers can adapt rather than
+  # discover the differences one failure at a time.
+  if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux/files/usr" ]; then
+    echo termux
+    return
+  fi
   case "$(uname -s)" in
     Linux*)  echo linux ;;
     Darwin*) echo macos ;;
     MINGW*|MSYS*|CYGWIN*) echo windows ;;
     *) echo unknown ;;
   esac
+}
+
+zero_is_termux() {
+  [ "$(zero_os)" = termux ]
+}
+
+# Android reclaims memory from backgrounded apps, which for Termux means the
+# operator is killed the moment you switch away. A wake lock is what keeps ZERO
+# alive with the screen off; it costs battery, and it is released by stop-zero.
+zero_wake_lock() {
+  if zero_is_termux && command -v termux-wake-lock >/dev/null 2>&1; then
+    termux-wake-lock && echo "  wake lock: held (release with scripts/stop-zero.sh)"
+  fi
+}
+
+zero_wake_unlock() {
+  if zero_is_termux && command -v termux-wake-unlock >/dev/null 2>&1; then
+    termux-wake-unlock && echo "wake lock: released"
+  fi
 }
 
 # Real LAN address of this machine. Prints nothing when there is no network.

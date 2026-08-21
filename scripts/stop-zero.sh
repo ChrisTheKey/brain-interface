@@ -25,3 +25,7 @@ stop_one() {
 
 stop_one gateway
 stop_one hwd-zero
+
+# On a phone the wake lock outlives the processes it was taken for, so it has to
+# be released explicitly or the battery keeps paying for a ZERO that is gone.
+zero_wake_unlock

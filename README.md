@@ -64,6 +64,40 @@ npm run verify      # acceptance run against the live system
 npm run test        # unit tests
 ```
 
+## On the phone instead (Termux)
+
+The supported shape is laptop-hosts, phone-opens-a-browser. Running the operator
+*on* the phone works too, and these scripts do it — with the trade-offs stated
+rather than discovered.
+
+```bash
+pkg install git
+mkdir -p ~/ZERO-WORKSPACE && cd ~/ZERO-WORKSPACE
+git clone -b claude/zero-autonomous-business-system-0d7eku https://github.com/ChrisTheKey/HWD-ZERO.git
+git clone -b claude/zero-autonomous-business-system-0d7eku https://github.com/ChrisTheKey/brain-interface.git
+cd brain-interface
+bash scripts/setup-termux.sh
+bash scripts/start-zero-termux.sh
+```
+
+Then open the URL it prints, on the phone itself.
+
+| Works | Does not |
+| --- | --- |
+| operator, gateway, 3D brain | Postgres, Redis, Celery — not packaged for Termux |
+| missions, gates, kill switch, audit | Ollama — no Termux build; ZERO reports LOCAL MODEL OFFLINE |
+| browser speech in and out | whisper.cpp / Kokoro — buildable, not by these scripts |
+| lead scraper `analyse`, `prepare_outreach` | `search_leads`, `persist_leads` — need config and a database |
+
+`start-zero-termux.sh` takes a wake lock, because Android reclaims memory from
+backgrounded apps and would otherwise kill the operator when you switch away.
+`stop-zero.sh` releases it — a wake lock that outlives its processes just costs
+battery.
+
+The network rule does not change because the host did: only the gateway binds
+beyond loopback, HWD-ZERO stays on 127.0.0.1, and LAN access still needs the
+token.
+
 ## Where things live
 
 | | |

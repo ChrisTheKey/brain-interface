@@ -20,8 +20,6 @@
     "zero:lan": "bash scripts/start-zero-lan.sh"
   },
   "dependencies": {
-    "@types/three": "^0.180.0",
-    "playwright": "^1.62.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "three": "^0.180.0"
@@ -31,11 +29,13 @@
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "^5.1.0",
     "eslint": "^9.39.0",
     "eslint-plugin-react-hooks": "^7.0.1",
     "globals": "^16.5.0",
     "jsdom": "^28.0.0",
+    "playwright": "^1.62.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.0",
     "vite": "^7.1.12",
