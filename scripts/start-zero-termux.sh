@@ -24,12 +24,20 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib-zero.sh"
+# `lib-zero.sh` turns on `errexit` for its own callers, and this script must
+# not have it. Its whole job is to survive things that fail — a stale pid
+# check that finds nothing, an absent backend, a build that did not work —
+# and under `set -e` each of those ends the script instead of being handled.
+# That is precisely how the gateway came to be skipped. Errors are checked
+# explicitly here, one at a time, where the right response is known.
+set +e
 cd "$ZERO_ROOT"
 
 BACKGROUND=false
 LAN_MODE=false
 STOP_ONLY=false
 NO_BACKEND=false
+NO_SUPERVISE=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -37,6 +45,7 @@ for arg in "$@"; do
     --lan) LAN_MODE=true ;;
     --stop) STOP_ONLY=true ;;
     --no-backend) NO_BACKEND=true ;;
+    --no-supervise) NO_SUPERVISE=true ;;
     -h|--help) sed -n '3,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
@@ -45,6 +54,7 @@ done
 
 GATEWAY_PID_FILE="$ZERO_PID_DIR/gateway.pid"
 ZERO_PID_FILE="$ZERO_PID_DIR/hwd-zero.pid"
+SUPERVISOR_PID_FILE="$ZERO_PID_DIR/supervisor.pid"
 GATEWAY_LOG="$ZERO_LOG_DIR/gateway.log"
 ZERO_LOG="$ZERO_LOG_DIR/hwd-zero.log"
 WAKELOCK_FILE="$ZERO_PID_DIR/wakelock"
@@ -61,7 +71,9 @@ HEALTH_URL="http://127.0.0.1:$ZERO_UI_PORT/api/health"
 # ---------------------------------------------------------------------------
 stop_tracked() {
   local stopped=0
-  for entry in "gateway:$GATEWAY_PID_FILE" "hwd-zero:$ZERO_PID_FILE"; do
+  # The supervisor first: it would otherwise notice the backend dying and
+  # helpfully restart it while we are trying to stop everything.
+  for entry in "supervisor:$SUPERVISOR_PID_FILE" "gateway:$GATEWAY_PID_FILE" "hwd-zero:$ZERO_PID_FILE"; do
     local name="${entry%%:*}" file="${entry#*:}" pid
     if pid="$(zero_live_pid "$file")"; then
       # TERM, then a short grace period, then KILL. Never a pattern match:
@@ -136,6 +148,7 @@ fi
 step "2 · RUN STATE"
 zero_clear_stale_pid "$GATEWAY_PID_FILE" && warn "removed a stale gateway pid file"
 zero_clear_stale_pid "$ZERO_PID_FILE" && warn "removed a stale hwd-zero pid file"
+zero_clear_stale_pid "$SUPERVISOR_PID_FILE" && warn "removed a stale supervisor pid file"
 
 if EXISTING="$(zero_live_pid "$GATEWAY_PID_FILE")"; then
   if zero_http_ok "$HEALTH_URL"; then
@@ -270,18 +283,24 @@ else
   # overrides it for a deployment that starts the operator some other way.
   START_CMD="${ZERO_START_CMD:-}"
   if [ -z "$START_CMD" ]; then
+    # HWD-ZERO's own serving layer. `python -m zero.server` is what
+    # `pip install -e .` in that repository makes available.
     START_CMD="$PYTHON_BIN -m zero.server --host 127.0.0.1 --port $(zero_url_port "$ZERO_API_URL") --quiet"
   fi
   warn "starting: $START_CMD"
   (
     cd "$ZERO_RUNTIME_DIR" || exit 1
+    # `exec` matters: without it `$!` names this shell rather than the server
+    # it launches, so the pid file would point at a wrapper — and stopping the
+    # wrapper would leave the real process orphaned.
     if command -v setsid >/dev/null 2>&1; then
-      setsid nohup sh -c "$START_CMD" >>"$ZERO_LOG" 2>&1 &
+      setsid nohup sh -c "exec $START_CMD" >>"$ZERO_LOG" 2>&1 &
     else
-      nohup sh -c "$START_CMD" >>"$ZERO_LOG" 2>&1 &
+      nohup sh -c "exec $START_CMD" >>"$ZERO_LOG" 2>&1 &
     fi
     echo $! >"$ZERO_PID_FILE"
   ) || warn "could not launch HWD-ZERO"
+  SUPERVISE_CMD="$START_CMD"
 fi
 
 # ---------------------------------------------------------------------------
@@ -316,7 +335,29 @@ case "$WS_STATE" in
 esac
 
 # ---------------------------------------------------------------------------
-# 8 · wake lock (background only, and optional)
+# 8 · keep HWD-ZERO alive
+#
+# Only when there is something to keep alive, and only when it started: a
+# supervisor for a backend that never came up would just log the same failure
+# every ten seconds. The gateway is never supervised — it survives an absent
+# backend by design, and a second thing able to restart it is a second thing
+# able to take port 3000 away.
+# ---------------------------------------------------------------------------
+if [ "$NO_SUPERVISE" != true ] && [ -n "${SUPERVISE_CMD:-}" ] && [ "$ZERO_STATE" = "healthy" ]; then
+  ZERO_SUPERVISE_CMD="$SUPERVISE_CMD" \
+  ZERO_RUNTIME_DIR="$ZERO_RUNTIME_DIR" \
+  ZERO_API_URL="$ZERO_API_URL" \
+    setsid nohup bash "$ZERO_ROOT/scripts/zero-supervise.sh" >/dev/null 2>&1 &
+  sleep 0.5
+  if SUP_PID="$(zero_live_pid "$SUPERVISOR_PID_FILE")"; then
+    ok "supervisor running (pid $SUP_PID) — restarts HWD-ZERO if it dies"
+  else
+    warn "supervisor did not start; HWD-ZERO will not be restarted automatically"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 9 · wake lock (background only, and optional)
 # ---------------------------------------------------------------------------
 if [ "$BACKGROUND" = true ] && command -v termux-wake-lock >/dev/null 2>&1; then
   if termux-wake-lock >/dev/null 2>&1; then
@@ -326,7 +367,7 @@ if [ "$BACKGROUND" = true ] && command -v termux-wake-lock >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# 9 · the real URLs
+# 10 · the real URLs
 # ---------------------------------------------------------------------------
 LAN_IP="$(zero_lan_ip || true)"
 echo
@@ -359,6 +400,7 @@ echo "tail -f $ZERO_LOG"
 echo
 echo "STOP"
 echo "bash scripts/start-zero-termux.sh --stop"
+echo
 echo
 
 if [ "$BACKGROUND" = true ]; then

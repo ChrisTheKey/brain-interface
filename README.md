@@ -234,9 +234,18 @@ token. If port 3000 does not answer they say `ZERO GATEWAY FAILED` and print
 the log path rather than claiming success.
 
 ```
-.zero/run/gateway.pid     .zero/logs/gateway.log
-.zero/run/hwd-zero.pid    .zero/logs/hwd-zero.log
+.zero/run/gateway.pid      .zero/logs/gateway.log
+.zero/run/hwd-zero.pid     .zero/logs/hwd-zero.log
+.zero/run/supervisor.pid   .zero/logs/supervisor.log
 ```
+
+`--background` starts three things: the gateway on 3000, HWD-ZERO on loopback
+via `python -m zero.server`, and a small supervisor that restarts HWD-ZERO if
+it dies. The gateway is deliberately *not* supervised — it survives an absent
+backend by design, and a second process able to restart it would be a second
+process able to take port 3000 away. The supervisor exits when the gateway
+does, and gives up after five failed restarts in five minutes rather than
+hammering a broken install (`--no-supervise` turns it off).
 
 Stopping goes through those pid files only — never `pkill node` or
 `killall python`, which on a phone take out whatever else is running.
