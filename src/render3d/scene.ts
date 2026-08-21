@@ -297,6 +297,9 @@ export function createBrainScene(
     buildEdges(layout, colorByAgent, ambientColor);
 
     for (const handle of clusters) dynamic.add(handle.gate);
+
+    // The layout decides the framing, so re-fit now that it exists.
+    resize();
   }
 
   function buildGate(hub: Vec3): Mesh {
@@ -414,17 +417,21 @@ export function createBrainScene(
   // ------------------------------------------------------------------ camera
 
   const orbit = { theta: 0, phi: 0.12, radius: 23, targetRadius: 23 };
+  /** Distance that frames the whole brain for the current viewport. */
+  let overview = 23;
+  let focused = false;
   const focusTarget = new Vector3(0, 0, 0);
   const cameraTarget = new Vector3(0, 0, 0);
 
   function focus(agentId: string | null): void {
     const handle = clusters.find((entry) => entry.agentId === agentId);
+    focused = handle !== undefined;
     if (handle) {
       focusTarget.copy(handle.hubWorld);
-      orbit.targetRadius = 15;
+      orbit.targetRadius = overview * 0.55;
     } else {
       focusTarget.set(0, 0, 0);
-      orbit.targetRadius = 23;
+      orbit.targetRadius = overview;
     }
   }
 
@@ -613,7 +620,10 @@ export function createBrainScene(
   };
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
-    orbit.targetRadius = Math.max(8, Math.min(60, orbit.targetRadius + event.deltaY * 0.02));
+    orbit.targetRadius = Math.max(
+      overview * 0.25,
+      Math.min(overview * 2.4, orbit.targetRadius + event.deltaY * 0.02),
+    );
   };
   const onTouchMove = (event: TouchEvent): void => {
     if (event.touches.length !== 2) return;
@@ -621,7 +631,10 @@ export function createBrainScene(
     if (!a || !b) return;
     const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
     if (pinchDistance > 0) {
-      orbit.targetRadius = Math.max(8, Math.min(60, orbit.targetRadius - (distance - pinchDistance) * 0.06));
+      orbit.targetRadius = Math.max(
+        overview * 0.25,
+        Math.min(overview * 2.4, orbit.targetRadius - (distance - pinchDistance) * 0.06),
+      );
     }
     pinchDistance = distance;
   };
@@ -637,6 +650,24 @@ export function createBrainScene(
   renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: true });
   renderer.domElement.addEventListener('touchend', onTouchEnd);
 
+  /** Distance at which the whole brain fits this viewport. */
+  function fitRadius(width: number, height: number): number {
+    const aspect = width / Math.max(1, height);
+    const vertical = camera.fov * (Math.PI / 180);
+    // On a phone in portrait the limiting dimension is width, so the horizontal
+    // field of view decides — fitting to height would push half the brain off
+    // the sides. This is what keeps the Galaxy showing the whole picture rather
+    // than a crop of the middle of it.
+    const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * aspect);
+    const limiting = Math.min(vertical, horizontal);
+    // Two thirds of the bounding radius. The outermost ambient neurons are
+    // sparse, so framing to the last one of them leaves the brain small in the
+    // middle of an empty frame; this fills the viewport and lets the sparse
+    // fringe run off the edges, which is what the reference image does.
+    const radius = (layout?.bounds.radius ?? BRAIN_SCALE * 1.35) * 0.66;
+    return radius / Math.sin(limiting / 2);
+  }
+
   function resize(): void {
     const width = mount.clientWidth || 1;
     const height = mount.clientHeight || 1;
@@ -646,6 +677,13 @@ export function createBrainScene(
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     (smokeMaterial.uniforms as Record<string, { value: number }>).uPixelRatio!.value = ratio;
+
+    // Re-frame unless the operator has zoomed to an agent, whose framing is
+    // theirs to keep.
+    if (!focused) {
+      overview = fitRadius(width, height);
+      orbit.targetRadius = overview;
+    }
   }
 
   resize();
