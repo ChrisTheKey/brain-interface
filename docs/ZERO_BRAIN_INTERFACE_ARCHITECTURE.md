@@ -1,40 +1,64 @@
 # ZERO Brain Interface — Architecture
 
-## Roles
+How a spoken sentence becomes an agent doing real work, and where it is stopped
+if it should be.
 
-| Component | Role |
-| --- | --- |
-| **HWD-ZERO** | Central operator: reasoning, memory, missions, policy engine, permission engine, capability broker, agent router, verifier, event source |
-| **brain-interface** | Visual / voice / mission-input / approval / monitoring surface — never the orchestrator |
-| **ZERO Gateway** | One origin on port 3000: serves the interface, proxies `/api` and `/ws` to HWD-ZERO, guards LAN access |
-| **Child agents** | Eight repositories HWD-ZERO runs work in |
-
-## Request path
+## The hierarchy
 
 ```
-USER  (laptop browser  /  Samsung Galaxy S25 Ultra)
-  ↓  http://127.0.0.1:3000   |   http://<laptop-lan-ip>:3000
-ZERO GATEWAY :3000                     ← the only port on the LAN
-  ├── /            static brain interface
-  ├── /api/*  ───┐
-  └── /ws/*   ───┤ (loopback only)
-                 ▼
-HWD-ZERO  127.0.0.1:8000
-  ↓ ZeroSession
-  ↓ Memory
-  ↓ Reasoning              (ModelProvider → Ollama 127.0.0.1:11434, cloud only by policy)
-  ↓ Policy Engine
-  ↓ Capability Broker
-  ↓ Permission Engine      → approval gate → human decision on laptop or phone
-  ↓ Agent Registry
-  ↓ Agent Adapter
-  ↓ CHILD AGENT            127.0.0.1:<agent-port>, never on the LAN
-  ↓ Verifier
-  ↓ ZERO
-  ↓ TTS
-  ↓ Web Audio analyser
-  ↓ 3D / canvas brain
-USER
+ME
+ └── ZERO / HWD-ZERO          the operator: reasons, plans, rules, verifies
+      └── MISSION SYSTEM      plans over child agents, resumable, persisted
+           └── POLICY + PERMISSION ENGINE
+                └── CHILD AGENTS
+                     └── TOOLS / EXTERNAL SERVICES
+```
+
+The language model is not ZERO. The interface is not ZERO. A child agent is not
+ZERO. **HWD-ZERO is the operator runtime**, and everything else either serves it
+or is driven by it.
+
+## The path a request takes
+
+```
+        Laptop browser                    Samsung Galaxy S25 Ultra
+              │                                     │
+              │  http://127.0.0.1:3000              │  http://<laptop-lan-ip>:3000
+              └──────────────┬──────────────────────┘
+                             ▼
+                   ZERO GATEWAY  :3000            the only process on the LAN
+                   ├── /            the built interface
+                   ├── /api/*       proxied to the operator
+                   └── /ws/events   proxied to the operator
+                             │
+                             ▼  127.0.0.1:8000
+                       HWD-ZERO — zero/ops/
+                             │
+      ┌──────────────────────┼──────────────────────┐
+      ▼                      ▼                      ▼
+   Memory                Reasoning              Agent Registry
+   (mission store,       (ZeroSession,          (agents/child-agents.yaml
+    audit, policy)        planner)               + each repo's agent.yaml)
+                             │
+                             ▼
+                    Capability Broker      known capability? agent holds it?
+                             │
+                             ▼
+                    Permission Engine      policy allowed / approval / denied
+                             │
+                             ├──── approval required ──▶ operator's phone
+                             │                              │
+                             ▼                              ▼
+                      Agent Adapter  ◀────────── single-use approval token
+                             │
+                             ▼
+                        Child Agent          own repository, no shell, bounded
+                             │
+                             ▼
+                    Verification (CHECKMATE)
+                             │
+                             ▼
+                          ZERO  ──▶ TTS ──▶ Web Audio analyser ──▶ 3D brain
 ```
 
 ## Child agents
@@ -51,102 +75,128 @@ HWD-ZERO
 └── Funnel                            funnel
 ```
 
-Defined in `src/zero/agentPolicy.ts`. `parent` is always HWD-ZERO.
+`parent` is always `zero`. ZERO decides when an agent runs, why, with what
+input, under which permissions, in what order, and whether the result is
+acceptable.
 
-### Never registered
+### Never child agents
 
-`Website-Building`, `Loop-Engeneering`, `Prompt-Optimizer`, `more-available-tokens`.
+`Website-Building`, `Loop-Engeneering` (and the `Loop-Engeniering` spelling that
+actually exists on GitHub), `Prompt-Optimizer`, `more-available-tokens`.
 
-The exclusion is applied **before** classification, before the graph, before the
-routing roster and before the invocation layer — a manifest cannot re-enable
-them either. `tests/agentRegistry.test.ts` asserts this per repository.
+The exclusion is enforced in `zero/ops/exclusions.py`, below discovery and again
+at the execution seam. It cannot be undone from data: a manifest, an
+`agent.yaml`, the registry file itself or an API payload naming one of them is
+rejected rather than honoured. When one is present on disk, discovery reports it
+as *excluded* rather than omitting it — a refusal you can see is a refusal you
+can trust.
 
-`HWD-ZERO` and `brain-interface` are detected by evidence (ZERO runtime markers,
-frontend markers) and are never child agents.
+`HWD-ZERO` is the parent, and `brain-interface` is a client. Neither is an agent.
 
-## Discovery
+## The layers, and what each refuses to do
 
-Discovery runs **through ZERO**, not through the browser: one read-only
-`command/exec` under `VITE_ZERO_AGENT_ROOT` returns, per repository, the path,
-git remote, branch, README headline and the evidence used for classification
-(agent instructions, entrypoints, MCP markers, frontend markers, ZERO runtime
-markers). An optional `zero-agents.json` manifest in the same root adds role,
-capabilities, inputs and outputs.
-
-The result feeds the graph *and* ZERO's routing roster, so the picture and the
-orchestration cannot disagree.
-
-## Network model
-
-| Service | Address | On the LAN? |
+| Module | Owns | Will not |
 | --- | --- | --- |
-| ZERO Gateway | `0.0.0.0:3000` only with `ZERO_LAN_MODE=true` | yes, with a token |
-| HWD-ZERO API | `127.0.0.1:8000` | no |
-| Ollama | `127.0.0.1:11434` | no |
-| Child agents | `127.0.0.1:<port>` | no |
+| `ops/exclusions` | the four blocked repositories | be widened by configuration |
+| `ops/discovery` | finding repositories, cached | execute repository code |
+| `ops/child_agents` | the registry | let a manifest widen its own grant |
+| `ops/capabilities` | the capability vocabulary and broker | rule on a name it does not know |
+| `ops/policy` | what ZERO may do unattended | let ZERO promote itself |
+| `ops/approvals` | single-use, expiring, payload-bound grants | let one approval release another action |
+| `ops/audit` | the append-only record | store arguments or secrets |
+| `ops/safemode` | the kill switch | lift itself on a timer |
+| `ops/adapters` | running an agent | use a shell, or leave loopback |
+| `ops/planner` | objective → plan | invent a step for an agent that is not there |
+| `ops/operator` | the one execution path | have a second one |
+| `ops/api` | the HTTP + WebSocket surface | enforce a permission of its own |
 
-No tunnels, no UPnP, no port forwarding. LAN is the boundary.
+## The permission model
 
-## Authentication
+Three outcomes, never two:
 
-On first start the gateway generates a 256-bit token, writes it to
-`.zero/gateway-token` with `0600` and prints a pairing URL. On loopback the
-laptop's own browser is trusted; every LAN request needs the token (header,
-cookie or `?token=`). `POST /api/gateway/session` exchanges the token for a
-cookie so the phone stays paired. Requests are rate limited per client address.
-The token is never part of the frontend bundle.
+- **POLICY ALLOWED** — ZERO proceeds and audits it.
+- **APPROVAL REQUIRED** — the mission stops, an approval is raised, the branch
+  visibly halts at a gate in the brain, and nothing runs until you decide.
+- **DENIED** — the agent was never granted the capability. No approval is
+  offered, because there is nothing to approve.
 
-## The operator's API
+An approval is bound to a digest over `(mission, agent, capability, action,
+target, payload)`. Redeeming it requires reproducing that digest, so approving
+one action cannot release another, a changed payload invalidates it, and it is
+consumed on use. The one-time token is held only in the operator's memory and
+never reaches the interface — the browser approves by id.
 
-HWD-ZERO serves it with `zero serve` (`zero/api/` in that repository); the
-interface reads it through the gateway, same origin, no address and no
-credential in the bundle. `src/hwd/client.ts` is the whole client surface.
+**ZERO can learn workflows. ZERO cannot remove its own safety gates.** Repeated
+approvals produce a `policy.suggested` event — a question, not a change. The
+always-human floor (`external.message`, `external.publish`,
+`deployment.execute`, `filesystem.delete`, `git.push`, `credentials.use`,
+`purchase.execute`, `system.install`, `database.destructive`) cannot be promoted
+by any caller, including you, including by editing the policy file.
 
-| Method | Path | Used for |
+## The network model
+
+```
+LAPTOP
+  0.0.0.0:3000        ZERO gateway          ← the phone, with a token
+  127.0.0.1:8000      HWD-ZERO operator     ← the gateway only
+  127.0.0.1:11434     Ollama                ← HWD-ZERO only
+  127.0.0.1:<ports>   child agents          ← HWD-ZERO only
+```
+
+Only the gateway ever leaves loopback, and only when `ZERO_LAN_MODE=true`. The
+HTTP adapter refuses any agent endpoint that is not on loopback, so a
+manifest cannot move a child agent onto an address the phone could reach. No
+tunnel, no UPnP, no port forwarding: LAN is as far as this goes.
+
+## The event bus and the brain
+
+`zero/ops/events.py` publishes what happens; `/ws/events` streams it; the
+renderer draws it.
+
+| Event | What the brain does |
+| --- | --- |
+| `zero.state.changed` | the core's activity and the whole scene's mode |
+| `mission.planning` | every candidate branch lights briefly |
+| `agent.started` | that branch carries energy outward |
+| `agent.completed` | energy runs back toward the core |
+| `approval.required` | the branch stops at a visible ring |
+| `agent.error` | the branch flashes and falls back |
+
+An event carries `simulated: true` only when it came from the development
+visualiser. Real execution never sets it, so a simulated run cannot be presented
+as real activity.
+
+The core, the particles and the smoke are driven by an `AnalyserNode` reading
+the audio that is **actually playing** — not by the length of the text. While
+listening, the microphone drives them instead.
+
+## Where state lives
+
+| State | Where | Survives |
 | --- | --- | --- |
-| GET | `/api/state` | brain revision, mission counts, SAFE_MODE |
-| GET | `/api/agents` | `agents/registry.yaml`, verbatim |
-| GET | `/api/tasks` | contracts that can be started, and their gates |
-| GET | `/api/missions`, `/api/missions/<id>/journal` | mission list and audit trail |
-| GET | `/api/approvals` | gates a mission is genuinely stopped on |
-| GET | `/ws/events` | the live stream |
-| POST | `/api/missions` | start a mission from a contract ZERO holds |
-| POST | `/api/approvals` → `/api/approvals/<id>/grant` | mint and redeem one approval ticket |
-| POST | `/api/control/safe-mode` | the kill switch |
+| child agent registry | `agents/child-agents.yaml` | git |
+| ops missions and plans | `state/ops/missions/` | restart |
+| approvals | `state/ops/approvals.json` | restart |
+| autonomy policy | `state/ops/policy.json` | restart |
+| audit trail | `state/ops/audit.ndjson` | restart, append-only |
+| SAFE_MODE | `state/ops/safe-mode.json` | restart |
+| discovery cache | `state/ops/discovery-cache.json` | bounded TTL |
+| engineering missions | `missions/` (existing `MissionStore`) | restart |
 
-### Approvals
+The interface holds no truth of its own. It renders the operator's state and
+re-reads on reconnect, which is why a phone that was asleep and a laptop that
+was not converge on the same picture.
 
-The interface cannot approve anything by asserting it. It asks the operator for
-a ticket bound to that mission, that gate and a digest of exactly what the human
-was shown, then redeems that one ticket — single use, expiring, re-checked
-server-side. A grant clears one gate for one resume; it never edits contract
-permissions, so the same action asks again next time. There is no deny button:
-an unapproved gate stays closed, because denial is the default.
+## Resource shape
 
-## Event contract
+The operator is designed for a laptop with 8 GB of RAM that is also running a
+model:
 
-The interface consumes these events from `/ws/events` and renders them as ZERO
-state, agent activity and approval gates:
-
-```
-zero.state.changed | zero.listening | zero.thinking | zero.planning | zero.speaking
-mission.created | mission.planning | mission.executing | mission.verifying
-mission.completed | mission.failed
-agent.started | agent.activity | agent.completed | agent.error
-approval.required | approval.approved | approval.denied
-policy.suggested | policy.changed
-```
-
-Each event carries `event_id`, `timestamp`, `mission_id`, `agent_id`, `type`,
-`payload`.
-
-## Voice
-
-```
-microphone → speech-to-text → the same input pipeline as typed text → HWD-ZERO
-HWD-ZERO → answer → TTS → AudioContext → AnalyserNode → brain + smoke
-```
-
-States: `IDLE`, `LISTENING`, `PROCESSING`, `AGENT_ACTIVE`, `SPEAKING`, `ERROR`.
-Every visual reaction is driven by measured audio (RMS, band energy, onsets) or
-by a real event — never by a timer and never by text length.
+- The API is stdlib-only — no async web stack resident just to serve JSON and
+  one WebSocket. `zero/ops/websocket.py` implements the subset that is needed.
+- Child agents are subprocesses started per mission, not imports, so no agent's
+  dependency tree stays resident in the operator.
+- The brain is instanced geometry with attribute updates; the mobile profile
+  reduces density and pixel ratio rather than changing the scene.
+- Priority under load: HWD-ZERO runtime → active child agent → STT/TTS → UI →
+  visual effects. Never the reverse.

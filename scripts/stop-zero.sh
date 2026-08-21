@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
-# Stops the gateway this machine started. Never touches ZERO's own runtime.
+# Stops what these scripts started: the gateway, then HWD-ZERO.
+#
+# Note this is not the kill switch. STOP ZERO in the interface puts the operator
+# into SAFE_MODE and cancels running work while staying up to be resumed; this
+# ends the processes.
 source "$(dirname "${BASH_SOURCE[0]}")/lib-zero.sh"
 
-PID_FILE="$ZERO_PID_DIR/gateway.pid"
-if [ -f "$PID_FILE" ]; then
-  PID="$(cat "$PID_FILE")"
-  if kill -0 "$PID" 2>/dev/null; then
-    kill "$PID"
-    echo "gateway stopped (pid $PID)"
-  else
-    echo "gateway pid $PID is no longer running"
+stop_one() {
+  local name="$1" pid_file="$ZERO_PID_DIR/$1.pid"
+  if [ ! -f "$pid_file" ]; then
+    echo "$name: no pid file — nothing started by these scripts"
+    return
   fi
-  rm -f "$PID_FILE"
-else
-  echo "no gateway pid file — nothing started by these scripts is running"
-fi
+  local pid
+  pid="$(cat "$pid_file")"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid"
+    echo "$name: stopped (pid $pid)"
+  else
+    echo "$name: pid $pid is no longer running"
+  fi
+  rm -f "$pid_file"
+}
+
+stop_one gateway
+stop_one hwd-zero

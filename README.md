@@ -1,41 +1,152 @@
 # Brain Interface
 
-Brain Interface is the visual and interactive surface of **ZERO**. It is not a
-second brain and it holds no state of its own: every node, every edge and every
-status you see is read live from ZERO's own API.
+The visual, voice and approval surface of **ZERO**. It is not a second brain and
+it holds no state of its own: every node, every edge, every status and every
+permission gate you see is read live from HWD-ZERO, the operator.
 
 ```
-ZERO repository (agent runtime, orchestrator, agents, skills, memory, tools, voice)
-        │
-        │  JSON-RPC 2.0 over WebSocket  (codex app-server --listen ws://IP:PORT)
-        ▼
-brain-interface   (this repository — data adapter + graph transform + rendering)
-        │
-        ▼
-Browser
+        Laptop browser                 Samsung Galaxy S25 Ultra
+              │  127.0.0.1:3000              │  <laptop-lan-ip>:3000
+              └──────────────┬───────────────┘
+                             ▼
+                   ZERO GATEWAY :3000      the only process on the LAN
+                             │
+                             ▼  127.0.0.1:8000  (loopback only)
+                      HWD-ZERO  — the operator
+                             │
+   ┌──────────┬──────────┬───┴──────┬──────────┬──────────┬─────────┐
+ lead      meta      installer   reviews    insta    outreach   seo · funnel
+ scraper
 ```
 
-ZERO sits in the geometric centre as the orchestrator — and it is the
-operative centre, not just the visual one: it hears you, decides which of your
-agents is needed, starts a real thread in that agent's workspace, watches it
-work and answers with what came back.
+ZERO sits at the centre as the operator — the operative centre, not just the
+visual one. It hears you, decides which of your agents is needed, runs it inside
+its own repository under a capability grant, verifies what came back, stops at a
+permission gate when a human is required, and answers.
 
-Around ZERO the interface grows the entities ZERO actually reports: your
-**agents** (the agent repositories ZERO can run a task in), sessions (ZERO
-threads), sub-agents, knowledge bases (skills), tool providers (MCP servers)
-with their tools and resources, and connectors (apps). Add an agent repository
-and a node appears; remove it and the node disappears. Nothing is hardcoded to
-a fixed set of entities, and no production data is mocked.
+## Start it
+
+```bash
+# once
+bash scripts/setup-zero.sh
+
+# laptop only — everything on loopback
+npm run zero
+
+# laptop + phone — the gateway binds the LAN, everything else stays on 127.0.0.1
+npm run zero:lan
+```
+
+`zero:lan` prints the laptop's **current** LAN address and a pairing URL with a
+token. It detects the address each time rather than remembering it, because the
+laptop moves between WiFi and its own hotspot.
 
 ```
- I speak  →  microphone  →  speech-to-text  →  ZERO (routing turn, real agent roster)
-                                                  ↓
-                                       thread/start in the agent workspace
-                                                  ↓
-                                       turn/start  →  the agent works
-                                                  ↓
-                                    result  →  ZERO  →  voice output  →  I hear
+ZERO ONLINE
+
+LAPTOP:  http://127.0.0.1:3000
+GALAXY:  http://192.168.x.x:3000/?token=…
+API:     http://127.0.0.1:8000 (loopback only, not reachable from the phone)
+
+AGENTS:
+    * lead_scraper     acquisition    HEALTHY
+      seo              seo            OFFLINE
+      …
+    excluded: Prompt-Optimizer, Website-Building
+
+STATUS:  HEALTHY
 ```
+
+Then check the whole thing end to end:
+
+```bash
+npm run verify      # acceptance run against the live system
+npm run test        # unit tests
+```
+
+## Where things live
+
+| | |
+| --- | --- |
+| Architecture | [`docs/ZERO_BRAIN_INTERFACE_ARCHITECTURE.md`](docs/ZERO_BRAIN_INTERFACE_ARCHITECTURE.md) |
+| The operator | `HWD-ZERO/zero/ops/` |
+| Child agent registry | `HWD-ZERO/agents/child-agents.yaml` |
+| Excluded repositories | `HWD-ZERO/zero/ops/exclusions.py` |
+| 3D brain | `src/render3d/` |
+| Gateway | `server/gateway.mjs` |
+
+## Workspace layout
+
+ZERO finds its agents beside itself:
+
+```
+ZERO-WORKSPACE/
+├── HWD-ZERO/                          the operator
+├── brain-interface/                   this repository
+├── Autonomous-Website-Lead-Scraper/
+├── Meta-Agent/
+├── Auto-Agent-Install-Helper/
+├── Google-Bewertungen-AI-Agent/
+├── Insta-Agent/
+├── Autonomer-Website-Outreach-Agent/
+├── SEO/
+└── Funnel/
+```
+
+Set `ZERO_WORKSPACE` if yours is elsewhere. A repository that is not present is
+reported `OFFLINE` — ZERO never invents an agent to fill a gap, and a mission it
+cannot serve produces no plan rather than a plausible one.
+
+`Website-Building`, `Loop-Engeneering`, `Prompt-Optimizer` and
+`more-available-tokens` are never agents. If they are in the workspace they are
+detected, reported as excluded, and ignored.
+
+## Adding a child agent
+
+1. Add a block to `HWD-ZERO/agents/child-agents.yaml` — id, display name, repo,
+   department, capabilities, and what always needs your approval.
+2. Optionally drop an `agent.yaml` in the repository itself declaring its entry
+   point and adapter. A manifest may narrow what the operator granted; it can
+   never widen it.
+
+No renderer change is needed. The brain grows a cluster from the registry.
+
+## Voice
+
+Speech-to-text and text-to-speech run on the laptop, never on the phone. The
+Galaxy captures audio and plays audio; the laptop transcribes and synthesises.
+
+| | Preferred | Fallback |
+| --- | --- | --- |
+| STT | whisper.cpp (`ZERO_WHISPER_BIN`, `ZERO_WHISPER_MODEL`), faster-whisper | the browser's Web Speech API |
+| TTS | Kokoro (`ZERO_KOKORO_BIN`), piper (`ZERO_PIPER_BIN`, `ZERO_PIPER_VOICE`) | the browser's speechSynthesis |
+
+The fallback is a working configuration, not a failure: it runs on both the
+laptop and the Galaxy with nothing to download. When no local backend is
+configured ZERO reports `STT OFFLINE` / `TTS OFFLINE` and keeps running — it
+never quietly reaches for a cloud service you did not configure.
+
+## 8 GB of RAM
+
+The operator is built for a laptop that is also running a model:
+
+- the API is stdlib-only — no async web framework resident to serve JSON;
+- child agents are subprocesses per mission, so no agent's dependencies stay
+  loaded in the operator;
+- the brain uses instanced geometry, and the mobile profile lowers density and
+  pixel ratio rather than changing the scene;
+- under pressure the order is: ZERO runtime → active agent → STT/TTS → UI →
+  visual effects.
+
+## Permissions in one paragraph
+
+Every action is named as a capability, ruled on against the agent's grant and
+your policy, and comes out **allowed**, **needs you**, or **denied**. An
+approval is single-use, expiring, and bound to a digest of the exact payload —
+approving one action can never release another. ZERO may learn to do safe things
+unattended; it can never promote a capability off the always-human floor, and
+neither can a hand-edited policy file. **STOP ZERO** is server state: it stops
+the laptop, not just the screen you pressed it on.
 
 ## Architecture
 
@@ -51,8 +162,12 @@ a fixed set of entities, and no production data is mocked.
 | Protocol | `src/zero/protocol.ts` | Types mirrored from ZERO's generated schemas (`codex app-server generate-json-schema`) |
 | Adapter | `src/zero/adapter.ts` | Reads ZERO's entities, tracks live activity, records unavailable APIs instead of inventing data |
 | Graph | `src/graph/transform.ts` | Turns a ZERO snapshot into nodes/edges (UI abstraction only) |
-| Layout | `src/graph/layout.ts` | Hybrid radial + force relaxation in polar space |
-| Render | `src/render/brainRenderer.ts`, `src/render/smoke.ts` | Canvas 2D brain, activity pulses, audio-reactive smoke |
+| Operator client | `src/hwd/client.ts`, `src/hwd/types.ts` | The HWD-ZERO operations API: agents, missions, approvals, policy, kill switch, `/ws/events` |
+| Operator state | `src/state/useOperator.ts` | The server's state, re-read on reconnect; nothing optimistic |
+| Activity | `src/state/useAgentActivity.ts` | Turns ZERO's events into per-agent energy, gates and flow direction |
+| Brain layout | `src/render3d/layout3d.ts` | Deterministic 3D brain silhouette and per-agent clusters |
+| Brain shaders | `src/render3d/materials.ts` | Obsidian core, instanced neurons, travelling edge energy, smoke |
+| Brain scene | `src/render3d/scene.ts` | The WebGL scene, camera, picking and quality profiles |
 | Voice | `src/voice/*` | Provider abstraction, ZERO realtime provider, browser fallback |
 | Audio | `src/audio/analyser.ts` | Web Audio analysis (amplitude, bands, onsets) driving the smoke |
 
@@ -117,10 +232,13 @@ Whenever a ZERO API is missing or fails, the interface adds a note (see
 ## Requirements
 
 - Node.js ≥ 20.19 (Node 22 recommended) and npm
-- A running ZERO backend (the Codex agent runtime in this workspace) reachable
-  over WebSocket
-- A Chromium/Firefox/Safari browser with Web Audio support (optional; the brain
-  runs without audio)
+- Python ≥ 3.11 with `HWD-ZERO` beside this repository — the operator. The start
+  scripts launch it; `ZERO_BRAIN_ROOT` points elsewhere if yours is not adjacent.
+- A browser with WebGL for the 3D brain, and Web Audio for the audio-reactive
+  core and smoke. Without WebGL the panels, voice and approvals still work — the
+  picture is the part that is lost, not the control.
+- Optionally the Codex app-server on `ws://127.0.0.1:8787`, which still backs the
+  realtime voice provider. ZERO itself does not need it.
 
 ## Installation
 
@@ -145,7 +263,7 @@ credential.
 | `VITE_ZERO_CWDS` | – | Extra workspace roots to scan for skills, comma separated |
 | `VITE_ZERO_THREAD_LIMIT` | `40` | Threads requested per source kind |
 | `VITE_ZERO_REFRESH_INTERVAL_MS` | `20000` | Structural refresh interval |
-| `VITE_ZERO_BACKGROUND_IMAGE` | `/assets/brain-background.png` | Fullscreen background asset |
+| `VITE_ZERO_BACKGROUND_IMAGE` | `/reference/red-background.jpg` | Fullscreen background asset |
 | `VITE_ZERO_VOICE_PROVIDER` | `zero-realtime` | `zero-realtime` \| `speech-synthesis` \| `none` |
 | `VITE_ZERO_VOICE_NAMES` | – | Preferred platform voices (fallback provider only) |
 | `VITE_ZERO_VOICE_RATE` | `0.92` | Speech rate |
@@ -156,7 +274,10 @@ credential.
 
 ## The agent network
 
-The child agents of HWD-ZERO are fixed by policy (`src/zero/agentPolicy.ts`):
+The child agents of HWD-ZERO are declared in the operator's own registry,
+`HWD-ZERO/agents/child-agents.yaml`, which is the authority on capabilities and
+approvals. `src/zero/agentPolicy.ts` carries only the interface's copy of the
+department colours and the exclusion list:
 
 | Agent | Repository | Department |
 | --- | --- | --- |

@@ -14,7 +14,10 @@
     "typecheck": "tsc -b --force",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify": "node scripts/verify-zero.mjs",
+    "zero": "bash scripts/start-zero.sh",
+    "zero:lan": "bash scripts/start-zero-lan.sh"
   },
   "dependencies": {
     "@types/three": "^0.180.0",

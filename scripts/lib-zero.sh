@@ -8,6 +8,14 @@ ZERO_API_URL="${ZERO_API_URL:-http://127.0.0.1:8000}"
 ZERO_PID_DIR="$ZERO_ROOT/.zero"
 mkdir -p "$ZERO_PID_DIR"
 
+# Where HWD-ZERO and the agent repositories live. Detected from the usual
+# workspace layout, overridable, never guessed silently — zero_require_brain
+# says exactly what it looked for when it cannot find it.
+ZERO_WORKSPACE="${ZERO_WORKSPACE:-$(cd "$ZERO_ROOT/.." && pwd)}"
+ZERO_BRAIN_ROOT="${ZERO_BRAIN_ROOT:-$ZERO_WORKSPACE/HWD-ZERO}"
+ZERO_API_PORT="${ZERO_API_PORT:-8000}"
+ZERO_PYTHON="${ZERO_PYTHON:-python3}"
+
 zero_os() {
   case "$(uname -s)" in
     Linux*)  echo linux ;;
@@ -72,4 +80,68 @@ zero_require_node() {
     echo "node $(node -v) is too old — ZERO's interface needs >= 20.19." >&2
     exit 1
   fi
+}
+
+zero_require_brain() {
+  if [ ! -f "$ZERO_BRAIN_ROOT/agents/child-agents.yaml" ]; then
+    echo "HWD-ZERO not found at $ZERO_BRAIN_ROOT" >&2
+    echo "  Expected the operator repository beside this one:" >&2
+    echo "    $ZERO_WORKSPACE/HWD-ZERO" >&2
+    echo "  Set ZERO_BRAIN_ROOT=/path/to/HWD-ZERO to point elsewhere." >&2
+    exit 1
+  fi
+  if ! command -v "$ZERO_PYTHON" >/dev/null 2>&1; then
+    echo "$ZERO_PYTHON is required (>= 3.11). Set ZERO_PYTHON to your interpreter." >&2
+    exit 1
+  fi
+}
+
+# Starts HWD-ZERO on loopback unless it is already answering. Idempotent: a
+# laptop that woke from standby with the API still alive must not get a second.
+zero_start_api() {
+  if zero_http_ok "$ZERO_API_URL/api/health"; then
+    echo "  hwd-zero:  already up on $ZERO_API_URL"
+    return 0
+  fi
+  zero_require_brain
+  # Always 127.0.0.1: only the gateway is ever allowed to leave loopback.
+  ( cd "$ZERO_BRAIN_ROOT" && \
+    "$ZERO_PYTHON" -m zero serve --host 127.0.0.1 --port "$ZERO_API_PORT" \
+      --workspace "$ZERO_WORKSPACE" > "$ZERO_PID_DIR/hwd-zero.log" 2>&1 & \
+    echo $! > "$ZERO_PID_DIR/hwd-zero.pid" )
+
+  local attempt=0
+  while [ "$attempt" -lt 40 ]; do
+    if zero_http_ok "$ZERO_API_URL/api/health"; then
+      echo "  hwd-zero:  started on $ZERO_API_URL"
+      return 0
+    fi
+    sleep 0.25
+    attempt=$((attempt + 1))
+  done
+  echo "  hwd-zero:  FAILED to start — see $ZERO_PID_DIR/hwd-zero.log" >&2
+  return 1
+}
+
+# One line per child agent, from ZERO itself rather than from a hardcoded list.
+zero_print_agents() {
+  node -e '
+    const http = require("http");
+    http.get(process.argv[1] + "/api/agents", (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        try {
+          const data = JSON.parse(body);
+          for (const a of data.agents ?? []) {
+            const mark = a.health === "HEALTHY" ? "*" : " ";
+            console.log(`    ${mark} ${a.id.padEnd(16)} ${a.department.padEnd(14)} ${a.health}`);
+          }
+          if ((data.excluded ?? []).length) {
+            console.log(`    excluded: ${data.excluded.join(", ")}`);
+          }
+        } catch { console.log("    (agent list unavailable)"); }
+      });
+    }).on("error", () => console.log("    (agent list unavailable)"));
+  ' "$ZERO_API_URL"
 }
