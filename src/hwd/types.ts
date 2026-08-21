@@ -120,3 +120,30 @@ export interface OperatorState {
 }
 
 export type OperatorConnection = 'connecting' | 'open' | 'closed' | 'unreachable';
+
+/**
+ * The ZERO gateway's composite health, from `GET /api/health`.
+ *
+ * Three separate facts, never collapsed into one boolean. The gateway can be
+ * perfectly healthy while HWD-ZERO is down — that is the whole point of the
+ * distinction, and it is what turns "notLoaded" into "BACKEND OFFLINE".
+ */
+export interface GatewayHealth {
+  gateway: 'healthy';
+  /** HWD-ZERO's HTTP API, probed by the gateway on loopback. */
+  zero: 'healthy' | 'offline';
+  /** ZERO's runtime WebSocket upstream, probed by the gateway on loopback. */
+  websocket: 'healthy' | 'offline';
+  lanMode: boolean;
+  /** True when this origin demands a pairing token the client may not hold. */
+  authRequired: boolean;
+  /** Public paths the browser is expected to use. Never internal addresses. */
+  publicPaths: { api: string; ws: string; events: string };
+  /** Internal upstreams — present only when diagnostics are enabled. */
+  diagnostics?: {
+    zeroApi: string;
+    zeroRuntimeWs: string;
+    zeroDetail: string;
+    websocketDetail: string;
+  };
+}

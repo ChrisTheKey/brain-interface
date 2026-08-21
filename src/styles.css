@@ -233,10 +233,12 @@ body,
   color: var(--ink);
 }
 
-.connection-connected::before,
-.connection-connecting::before,
-.connection-disconnected::before,
-.connection-idle::before {
+/*
+ * One dot per connection state. The class comes from the state machine, so a
+ * state nobody styled shows the neutral "unknown" grey rather than nothing —
+ * an invisible dot would read as "fine".
+ */
+.connection::before {
   content: '';
   display: inline-block;
   width: 7px;
@@ -244,18 +246,30 @@ body,
   margin-right: 7px;
   border-radius: 50%;
   vertical-align: middle;
+  background: var(--ink-dim);
 }
 
-.connection-connected::before {
+.connection-ready::before {
   background: #7fe7c4;
 }
 
+.connection-backend_connected::before {
+  background: #a8e6c9;
+}
+
+.connection-starting::before,
 .connection-connecting::before {
   background: #ffd483;
 }
 
-.connection-disconnected::before,
-.connection-idle::before {
+.connection-degraded::before,
+.connection-safe_mode::before,
+.connection-auth_required::before {
+  background: #ffb066;
+}
+
+.connection-backend_offline::before,
+.connection-error::before {
   background: #ff8a8a;
 }
 
@@ -619,5 +633,173 @@ body,
     right: 12px;
     width: auto;
     max-height: 42vh;
+  }
+}
+
+/* --- the ZERO panel -------------------------------------------------------
+ *
+ * The counterpart to the operator's edge: what ZERO *is* right now, opposite
+ * what ZERO is *doing*. It states one word — READY, BACKEND OFFLINE — and the
+ * four facts that word was derived from, so the claim is always checkable.
+ */
+.zero-panel {
+  position: absolute;
+  z-index: 3;
+  top: 24px;
+  right: 24px;
+  width: min(272px, 32vw);
+  max-height: calc(100vh - 132px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+.zero-panel-backend_offline,
+.zero-panel-error {
+  border-color: rgba(255, 160, 150, 0.5);
+}
+
+.zero-panel-ready {
+  border-color: rgba(127, 231, 196, 0.4);
+}
+
+.zero-panel header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.zero-title {
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.zero-state {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.zero-panel-ready .zero-state {
+  color: #7fe7c4;
+}
+
+.zero-panel-backend_offline .zero-state,
+.zero-panel-error .zero-state {
+  color: var(--warn);
+}
+
+.zero-detail,
+.zero-operator {
+  margin: 0;
+  color: var(--ink-dim);
+}
+
+.zero-operator {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: #7fe7c4;
+}
+
+.zero-rows {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.zero-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.zero-row-label {
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.zero-row-value {
+  color: var(--ink);
+}
+
+.zero-row-ok .zero-row-value {
+  color: #7fe7c4;
+}
+
+.zero-row-warn .zero-row-value {
+  color: #ffb066;
+}
+
+.zero-row-bad .zero-row-value {
+  color: var(--warn);
+}
+
+.zero-row-wait .zero-row-value {
+  color: var(--ink-dim);
+}
+
+.zero-retry {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 5px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.zero-retry:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.zero-diagnostics {
+  margin-top: 4px;
+  color: var(--ink-dim);
+  font-size: 10.5px;
+}
+
+.zero-diagnostics summary {
+  cursor: pointer;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.zero-diagnostics ul {
+  margin: 6px 0 0;
+  padding-left: 14px;
+  word-break: break-all;
+}
+
+@media (max-width: 720px) {
+  .zero-panel {
+    top: auto;
+    bottom: 96px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-height: 34vh;
   }
 }

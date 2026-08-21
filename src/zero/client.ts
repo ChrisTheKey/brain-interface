@@ -36,7 +36,13 @@ export interface ZeroSocket {
 export type SocketFactory = (url: string) => ZeroSocket;
 
 export interface ZeroClientOptions {
-  url: string;
+  /**
+   * The endpoint to connect to. A resolver rather than a fixed string is the
+   * point: the URL is derived from `window.location` at connect time, so a
+   * reconnect after the page moved origin (laptop → LAN → HTTPS) picks up the
+   * new origin instead of the one that happened to be current at construction.
+   */
+  url: string | (() => string);
   clientInfo: { name: string; title?: string; version: string };
   experimentalApi?: boolean;
   optOutNotificationMethods?: string[];
@@ -75,6 +81,9 @@ export class ZeroClient {
   > &
     ZeroClientOptions;
 
+  /** Set once the handshake completed — proof ZERO itself answered. */
+  private responded = false;
+
   private socket: ZeroSocket | null = null;
   private nextId = 1;
   private readonly pending = new Map<RequestId, Pending>();
@@ -107,8 +116,19 @@ export class ZeroClient {
     return this.userAgent;
   }
 
+  /** The endpoint that will be used for the next connection attempt. */
   get url(): string {
-    return this.options.url;
+    return this.resolveUrl();
+  }
+
+  /** True once ZERO answered `initialize` — never true just because a socket opened. */
+  get hasResponded(): boolean {
+    return this.responded;
+  }
+
+  private resolveUrl(): string {
+    const value = this.options.url;
+    return typeof value === 'function' ? value() : value;
   }
 
   on<K extends keyof ZeroClientEvents>(event: K, handler: ZeroClientEvents[K]): () => void {
@@ -130,7 +150,7 @@ export class ZeroClient {
     this.handshake = new Promise<InitializeResponse>((resolve, reject) => {
       let socket: ZeroSocket;
       try {
-        socket = factory(this.options.url);
+        socket = factory(this.resolveUrl());
       } catch (error) {
         this.handshake = null;
         this.setState('disconnected', { error: describeError(error) });
@@ -156,6 +176,7 @@ export class ZeroClient {
           .then((response) => {
             this.notify(ZERO_METHODS.initialized);
             this.userAgent = response?.userAgent ?? null;
+            this.responded = true;
             this.reconnectDelay = this.options.minReconnectDelayMs;
             this.setState('connected');
             resolve(response);
@@ -206,6 +227,26 @@ export class ZeroClient {
       /* already closed */
     }
     this.setState('idle');
+  }
+
+  /**
+   * Reconnect immediately instead of waiting out the backoff.
+   *
+   * Called when the browser reports it is awake again (see
+   * `src/zero/lifecycle.ts`): a phone coming back from a locked screen should
+   * not sit in a fifteen-second wait for a socket that is already dead.
+   */
+  reconnectNow(): void {
+    if (this.state === 'connected' || this.state === 'connecting') return;
+    this.closedByUser = false;
+    if (this.reconnectTimer !== null) {
+      this.clearTimer(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectDelay = this.options.minReconnectDelayMs;
+    void this.connect().catch(() => {
+      /* the state listener already surfaced the failure */
+    });
   }
 
   request<T>(method: string, params?: unknown): Promise<T> {

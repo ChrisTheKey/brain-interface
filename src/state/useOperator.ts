@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OperatorError } from '../hwd/client';
+import { onNetworkWake } from '../zero/lifecycle';
 import type { HwdZeroClient } from '../hwd/client';
 import type {
   OperatorApproval,
@@ -34,6 +35,8 @@ export interface OperatorView {
   events: OperatorEvent[];
   /** Missions the operator currently reports as running. */
   runningMissionIds: string[];
+  /** True once HWD-ZERO returned real operator state — not merely "socket open". */
+  responded: boolean;
   safeMode: boolean;
   refresh: () => Promise<void>;
   startMission: (task: string) => Promise<void>;
@@ -63,6 +66,7 @@ export function useOperator(
   const [approvals, setApprovals] = useState<OperatorApproval[]>([]);
   const [tasks, setTasks] = useState<OperatorTask[]>([]);
   const [events, setEvents] = useState<OperatorEvent[]>([]);
+  const [responded, setResponded] = useState(false);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -80,6 +84,7 @@ export function useOperator(
       setMissions(nextMissions);
       setApprovals(nextApprovals);
       setTasks(nextTasks);
+      setResponded(true);
       setError('');
     } catch (cause) {
       if (!mounted.current) return;
@@ -132,7 +137,15 @@ export function useOperator(
         }
       },
     });
-    return stop;
+    // The phone waking up must not wait for the next backoff step.
+    const offWake = onNetworkWake(() => {
+      client.reconnectNow();
+      void refresh();
+    });
+    return () => {
+      offWake();
+      stop();
+    };
   }, [client, refresh]);
 
   const startMission = useCallback(
@@ -193,6 +206,7 @@ export function useOperator(
     tasks,
     events,
     runningMissionIds,
+    responded,
     safeMode: state?.safe_mode ?? false,
     refresh,
     startMission,

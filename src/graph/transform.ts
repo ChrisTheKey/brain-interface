@@ -590,3 +590,23 @@ function threadStatus(status: ThreadStatus | undefined, isLoaded: boolean): Node
       return isLoaded ? 'idle' : 'notLoaded';
   }
 }
+
+/**
+ * Replace the ZERO node's status with what the connection state machine
+ * actually knows.
+ *
+ * `buildGraph` can only report what the *snapshot* contains, and "no snapshot"
+ * is not the same fact as "ZERO is offline" — that was exactly the `notLoaded`
+ * confusion. The connection state is resolved separately (it needs HTTP health
+ * and the socket, neither of which is graph data), so it is applied here as a
+ * last step rather than threaded backwards into the transform.
+ */
+export function withZeroStatus(graph: GraphModel, status: NodeStatus): GraphModel {
+  let changed = false;
+  const nodes = graph.nodes.map((node) => {
+    if (node.id !== ZERO_NODE_ID || node.status === status) return node;
+    changed = true;
+    return { ...node, status };
+  });
+  return changed ? { ...graph, nodes } : graph;
+}

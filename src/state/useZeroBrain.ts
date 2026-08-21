@@ -10,6 +10,8 @@ import { config } from '../config';
 import { buildGraph, type GraphRuntime } from '../graph/transform';
 import type { GraphModel } from '../graph/model';
 import { ZeroClient, type ConnectionState } from '../zero/client';
+import { zeroRuntimeWsUrl } from '../zero/endpoints';
+import { onNetworkWake } from '../zero/lifecycle';
 import { ZeroDataAdapter, type ActivityEvent, type ZeroSnapshot } from '../zero/adapter';
 import type { ThreadStatus } from '../zero/protocol';
 import { ZeroVoiceService } from '../voice/service';
@@ -34,6 +36,8 @@ export interface BrainState {
   voiceReason: string | undefined;
   voiceProviderId: string | null;
   lastAgentMessage: string | null;
+  /** True once ZERO's runtime answered `initialize` — not merely "socket open". */
+  runtimeResponded: boolean;
   speak: (text: string) => Promise<void>;
   stopSpeaking: () => void;
   refresh: () => void;
@@ -53,10 +57,15 @@ export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
 
   // The transport is created once, outside the effect, so consumers can use it
   // during render without a state round-trip.
+  const [runtimeResponded, setRuntimeResponded] = useState(false);
+
   const [client] = useState<ZeroClient>(
     () =>
       new ZeroClient({
-        url: config.zeroWsUrl,
+        // Same origin, resolved per attempt: `/ws` on whatever address the
+        // browser actually opened. Never an internal host:port, which on a
+        // phone would resolve to the phone itself.
+        url: () => zeroRuntimeWsUrl(),
         clientInfo: {
           name: config.clientName,
           title: 'Brain Interface',
@@ -119,9 +128,16 @@ export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
     const offState = client.on('state', (state, detail) => {
       setConnection(state);
       setConnectionError(detail?.error ?? null);
+      if (state === 'connected') setRuntimeResponded(client.hasResponded);
     });
 
+    // Coming back from a locked screen or a WiFi switch: check now instead of
+    // sitting out the remaining backoff on a socket that is already dead.
+    const offWake = onNetworkWake(() => client.reconnectNow());
+
     const offSnapshot = adapter.on('snapshot', (next) => {
+      // A real snapshot is the strongest possible evidence that ZERO answered.
+      setRuntimeResponded(true);
       setSnapshot(next);
       if (!selectedThreadRef.current) {
         selectedThreadRef.current = next.threads[0]?.id ?? null;
@@ -188,6 +204,7 @@ export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
       offSnapshot();
       offActivity();
       offThreadStatus();
+      offWake();
       offVoice();
       voice.dispose();
       client.close();
@@ -256,6 +273,7 @@ export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
     voiceReason,
     voiceProviderId,
     lastAgentMessage,
+    runtimeResponded,
     speak,
     stopSpeaking,
     refresh,

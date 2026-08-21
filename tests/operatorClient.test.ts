@@ -69,8 +69,25 @@ describe('HWD-ZERO client', () => {
   });
 
   it('builds the event URL from the page origin, so no host is configured here', () => {
+    // Only tests pass a base; in the browser the URL comes from window.location.
     const client = new HwdZeroClient({ baseUrl: 'http://127.0.0.1:8000' });
     expect(client.eventsUrl()).toBe('ws://127.0.0.1:8000/ws/events');
+  });
+
+  it('reads health from the gateway rather than from HWD-ZERO directly', async () => {
+    const seen: string[] = [];
+    const client = new HwdZeroClient({
+      fetchImpl: (async (url: string) => {
+        seen.push(String(url));
+        return new Response(JSON.stringify({ gateway: 'healthy', zero: 'offline' }), {
+          status: 503,
+        });
+      }) as unknown as typeof fetch,
+    });
+    // 503 is a valid health answer ("gateway up, ZERO down"), so it must not
+    // be swallowed as a transport failure.
+    await expect(client.health()).rejects.toThrow();
+    expect(seen).toEqual(['/api/health']);
   });
 });
 

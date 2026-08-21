@@ -12,8 +12,11 @@
  * operator does not already hold.
  */
 
+import { Backoff } from '../zero/lifecycle';
+import { ZERO_EVENTS_WS_PATH, apiPath, sameOriginWsUrl } from '../zero/endpoints';
 import type {
   ApprovalTicket,
+  GatewayHealth,
   OperatorApproval,
   OperatorEvent,
   OperatorMission,
@@ -28,8 +31,10 @@ export interface OperatorClientOptions {
   fetchImpl?: typeof fetch;
   /** Injected so tests can drive a fake socket. */
   socketFactory?: (url: string) => WebSocket;
-  /** Backoff for the event stream, in ms. */
+  /** First backoff step for the event stream, in ms. Doubles up to the max. */
   reconnectDelayMs?: number;
+  /** Upper bound of the backoff, in ms. */
+  maxReconnectDelayMs?: number;
 }
 
 export class OperatorError extends Error {
@@ -52,15 +57,26 @@ export class HwdZeroClient {
   private readonly fetchImpl: typeof fetch;
   private readonly socketFactory: (url: string) => WebSocket;
   private readonly reconnectDelayMs: number;
+  private readonly maxReconnectDelayMs: number;
+  private readonly backoff: Backoff;
   private socket: WebSocket | null = null;
   private closedByUs = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reopen: (() => void) | null = null;
+  private responded = false;
 
   constructor(options: OperatorClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? '';
     this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
     this.socketFactory = options.socketFactory ?? ((url) => new WebSocket(url));
-    this.reconnectDelayMs = options.reconnectDelayMs ?? 2_000;
+    this.reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
+    this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? 15_000;
+    this.backoff = new Backoff(this.reconnectDelayMs, this.maxReconnectDelayMs);
+  }
+
+  /** True once HWD-ZERO returned a real payload — not merely "a socket opened". */
+  get hasResponded(): boolean {
+    return this.responded;
   }
 
   // ------------------------------------------------------------------ reads
@@ -69,7 +85,9 @@ export class HwdZeroClient {
     const response = await this.fetchImpl(joinPath(this.baseUrl, path), {
       headers: { accept: 'application/json' },
     });
-    return this.unwrap<T>(response);
+    const payload = await this.unwrap<T>(response);
+    this.responded = true;
+    return payload;
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
@@ -99,8 +117,13 @@ export class HwdZeroClient {
     return payload as T;
   }
 
-  health(): Promise<{ status: string; safe_mode: boolean }> {
-    return this.get('/api/health');
+  /**
+   * The gateway's composite health. It answers for itself *and* reports what
+   * it can actually see of HWD-ZERO, so an offline operator is a fact from the
+   * gateway rather than a fetch that simply never resolved in the browser.
+   */
+  health(): Promise<GatewayHealth> {
+    return this.get(apiPath('/health'));
   }
 
   state(): Promise<OperatorState> {
@@ -164,10 +187,11 @@ export class HwdZeroClient {
 
   eventsUrl(): string {
     if (this.baseUrl) {
-      return `${this.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws/events`;
+      return `${this.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}${ZERO_EVENTS_WS_PATH}`;
     }
-    const { protocol, host } = window.location;
-    return `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws/events`;
+    // Same origin, and `https:` upgrades the socket to `wss:` — a `ws:`
+    // socket from an HTTPS page is blocked as mixed content, not downgraded.
+    return sameOriginWsUrl(ZERO_EVENTS_WS_PATH, window.location);
   }
 
   /**
@@ -185,6 +209,7 @@ export class HwdZeroClient {
     onError?: (message: string) => void;
   }): () => void {
     this.closedByUs = false;
+    this.backoff.reset();
 
     const open = (): void => {
       if (this.closedByUs) return;
@@ -197,11 +222,18 @@ export class HwdZeroClient {
         return;
       }
       this.socket = socket;
-      socket.onopen = () => handlers.onOpen?.();
+      socket.onopen = () => {
+        // A successful connection is what earns the short delay back; without
+        // the reset every later drop would inherit the previous 15s ceiling.
+        this.backoff.reset();
+        handlers.onOpen?.();
+      };
       socket.onmessage = (message: MessageEvent) => {
         if (typeof message.data !== 'string') return;
         try {
-          handlers.onEvent(JSON.parse(message.data) as OperatorEvent);
+          const event = JSON.parse(message.data) as OperatorEvent;
+          this.responded = true;
+          handlers.onEvent(event);
         } catch {
           // A frame we cannot parse is dropped rather than rendered as an
           // event with missing fields.
@@ -217,16 +249,20 @@ export class HwdZeroClient {
 
     const schedule = (): void => {
       if (this.closedByUs || this.reconnectTimer !== null) return;
+      // 1s, 2s, 4s, 8s, then 15s — never a reconnect storm, never a long
+      // silence after the laptop comes back.
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
         open();
-      }, this.reconnectDelayMs);
+      }, this.backoff.next());
     };
 
+    this.reopen = open;
     open();
 
     return () => {
       this.closedByUs = true;
+      this.reopen = null;
       if (this.reconnectTimer !== null) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
@@ -234,5 +270,22 @@ export class HwdZeroClient {
       this.socket?.close();
       this.socket = null;
     };
+  }
+
+  /**
+   * Re-check the stream right now instead of waiting out the backoff. Called
+   * when the browser reports it woke up (`online`, tab visible again): the
+   * socket a locked phone left behind is already dead, it just has not been
+   * noticed yet.
+   */
+  reconnectNow(): void {
+    if (this.closedByUs || this.reopen === null) return;
+    if (this.socket !== null) return;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.backoff.reset();
+    this.reopen();
   }
 }

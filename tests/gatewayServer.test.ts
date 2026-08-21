@@ -46,10 +46,40 @@ describe('gateway server (LAN mode)', () => {
     expect((await response.json()).error).toBe('unauthorized');
   });
 
-  it('serves the health probe without a token', async () => {
+  it('serves the health probe without a token, and reports ZERO as offline', async () => {
+    // Health must be reachable before pairing: otherwise an unpaired phone
+    // cannot tell "wrong token" from "backend down" and shows the wrong state.
+    const response = await fetch(`${base}/api/health`);
+    // 503, because the upstream in this fixture is not listening. The gateway
+    // itself is healthy — the two facts are reported separately.
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      gateway: 'healthy',
+      zero: 'offline',
+      lanMode: true,
+    });
+  });
+
+  it('tells an unpaired caller that this origin needs a token', async () => {
+    const anonymous = await (await fetch(`${base}/api/health`)).json();
+    expect(anonymous.authRequired).toBe(true);
+    const paired = await (
+      await fetch(`${base}/api/health`, { headers: { authorization: `Bearer ${token}` } })
+    ).json();
+    expect(paired.authRequired).toBe(false);
+  });
+
+  it('keeps the legacy gateway health path working for the start scripts', async () => {
     const response = await fetch(`${base}/api/gateway/health`);
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ gateway: 'ok', lanMode: true });
+    expect(await response.json()).toMatchObject({ gateway: 'healthy' });
+  });
+
+  it('never leaks internal upstream addresses to a LAN client', async () => {
+    const body = await (await fetch(`${base}/api/health`)).json();
+    // LAN mode turns diagnostics off: a paired phone has no business learning
+    // which port HWD-ZERO listens on.
+    expect(body.diagnostics).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('59999');
   });
 
   it('pairs the device on the first authenticated load', async () => {

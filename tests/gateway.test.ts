@@ -10,6 +10,7 @@ import {
   loadOrCreateToken,
   readConfig,
   resolveStaticPath,
+  upstreamAddress,
 } from '../server/gateway.mjs';
 
 const tempDirs: string[] = [];
@@ -36,6 +37,32 @@ describe('gateway configuration', () => {
     expect(config.port).toBe(3000);
     expect(config.zeroApi).toBe('http://127.0.0.1:8000');
     expect(config.lanMode).toBe(false);
+  });
+
+  it('keeps the HTTP API and the runtime socket as two separate upstreams', () => {
+    // They are genuinely different processes on different ports; collapsing
+    // them into one value is exactly the port assumption to avoid.
+    const config = readConfig({
+      ZERO_API_URL: 'http://127.0.0.1:8100',
+      ZERO_RUNTIME_WS_URL: 'ws://127.0.0.1:8900',
+    });
+    expect(config.zeroApi).toBe('http://127.0.0.1:8100');
+    expect(config.zeroRuntimeWs).toBe('ws://127.0.0.1:8900');
+  });
+
+  it('resolves upstream ports without guessing', () => {
+    expect(upstreamAddress('http://127.0.0.1:8000')).toMatchObject({ port: 8000 });
+    expect(upstreamAddress('ws://127.0.0.1:8787')).toMatchObject({ port: 8787 });
+    // No explicit port: the scheme decides, and wss/https mean 443.
+    expect(upstreamAddress('http://zero.internal')).toMatchObject({ port: 80, secure: false });
+    expect(upstreamAddress('wss://zero.internal')).toMatchObject({ port: 443, secure: true });
+  });
+
+  it('turns diagnostics off on the LAN and on for local development', () => {
+    // A paired phone must not learn which internal port HWD-ZERO uses.
+    expect(readConfig({ ZERO_LAN_MODE: 'true' }).diagnostics).toBe(false);
+    expect(readConfig({}).diagnostics).toBe(true);
+    expect(readConfig({ ZERO_LAN_MODE: 'true', ZERO_DIAGNOSTICS: 'true' }).diagnostics).toBe(true);
   });
 
   it('honours an explicit UI port override', () => {

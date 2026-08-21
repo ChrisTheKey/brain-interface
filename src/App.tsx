@@ -5,14 +5,17 @@ import { NodeTooltip } from './ui/NodeTooltip';
 import { OperatorPanel } from './ui/OperatorPanel';
 import { StatusBar } from './ui/StatusBar';
 import { VoiceBar } from './ui/VoiceBar';
+import { ZeroPanel } from './ui/ZeroPanel';
 import { useZeroBrain } from './state/useZeroBrain';
 import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
 import { useOperator } from './state/useOperator';
+import { useZeroStatus } from './state/useZeroStatus';
+import { zeroNodeStatus } from './zero/connectionState';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
 import type { GraphNode } from './graph/model';
 import type { ZeroAgent } from './zero/agentRegistry';
-import type { GraphRuntime } from './graph/transform';
+import { withZeroStatus, type GraphRuntime } from './graph/transform';
 
 export default function App(): React.JSX.Element {
   // Same origin: the gateway on port 3000 proxies /api and /ws to HWD-ZERO on
@@ -25,6 +28,28 @@ export default function App(): React.JSX.Element {
   const [runtime, setRuntime] = useState<GraphRuntime>({});
   const agentTasksRef = useRef<Map<string, { task: string; status: string; at: number }>>(new Map());
   const brain = useZeroBrain(runtime);
+
+  // The single source of truth for what the interface may claim about ZERO.
+  // READY needs HTTP health *and* an open same-origin socket *and* a real
+  // answer from the backend — a rendered bundle proves none of the three.
+  const status = useZeroStatus({
+    runtimeSocket: brain.connection,
+    eventStream: operator.connection,
+    runtimeResponded: brain.runtimeResponded,
+    operatorResponded: operator.responded,
+    safeMode: operator.safeMode,
+    error: brain.connectionError ?? operator.error,
+  });
+
+  const showDiagnostics = import.meta.env.DEV;
+
+  // The ZERO node shows the *connection*, not "did a snapshot arrive". Offline
+  // must look offline instead of looking like an empty graph.
+  const graph = useMemo(
+    () => withZeroStatus(brain.graph, zeroNodeStatus(status.state)),
+    [brain.graph, status.state],
+  );
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{
     node: GraphNode | null;
@@ -75,8 +100,8 @@ export default function App(): React.JSX.Element {
   });
 
   const selectedNode = useMemo(
-    () => brain.graph.nodes.find((node) => node.id === selectedId) ?? null,
-    [brain.graph, selectedId],
+    () => graph.nodes.find((node) => node.id === selectedId) ?? null,
+    [graph, selectedId],
   );
 
   const selectedAgent = useMemo<ZeroAgent | null>(() => {
@@ -105,7 +130,7 @@ export default function App(): React.JSX.Element {
         aria-hidden="true"
       />
       <BrainStage
-        graph={brain.graph}
+        graph={graph}
         pulsesRef={brain.pulsesRef}
         levels={brain.levels}
         conversation={voice.state}
@@ -114,11 +139,23 @@ export default function App(): React.JSX.Element {
         onSelect={handleSelect}
         onHover={handleHover}
       />
+      <ZeroPanel
+        status={status}
+        registeredAgents={operator.registry?.agents.length ?? null}
+        runtimeAgents={brain.snapshot?.agents.length ?? null}
+        voiceState={brain.voiceState}
+        onRetry={() => {
+          status.retry();
+          brain.refresh();
+          void operator.refresh();
+        }}
+        showDiagnostics={showDiagnostics}
+      />
       <OperatorPanel operator={operator} />
       <NodeTooltip node={hovered.node} position={hovered.position} />
       <DetailPanel
         node={selectedNode}
-        graph={brain.graph}
+        graph={graph}
         activity={brain.activity}
         agent={selectedAgent}
         agentBusy={voice.state === 'agentActive' || voice.state === 'processing'}
@@ -139,11 +176,11 @@ export default function App(): React.JSX.Element {
         onSubmitText={voice.submitText}
       />
       <StatusBar
-        connection={brain.connection}
+        status={status}
         connectionError={brain.connectionError}
-        zeroUrl={config.zeroWsUrl}
+        showDiagnostics={showDiagnostics}
         snapshot={brain.snapshot}
-        graph={brain.graph}
+        graph={graph}
         voiceState={brain.voiceState}
         voiceReason={brain.voiceReason}
         onActivateVoice={() => {

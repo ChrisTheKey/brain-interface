@@ -1,13 +1,23 @@
 import { ZERO_VOICE_PROMPT } from './voice/provider';
+import { ZERO_API_BASE, ZERO_EVENTS_WS_PATH, ZERO_RUNTIME_WS_PATH } from './zero/endpoints';
 
 /**
- * Runtime configuration. Every backend address comes from the environment –
- * nothing about ZERO's location is hardcoded in the interface.
+ * Runtime configuration.
+ *
+ * Note what is *not* in here: no backend host, no backend port, no scheme.
+ * ZERO's address is not configuration for the browser — the gateway that
+ * served this bundle is the backend, and every endpoint is derived from
+ * `window.location` (see `src/zero/endpoints.ts`). Only the public paths are
+ * named here, so they can be referenced without repeating the literals.
  */
 
 export interface BrainInterfaceConfig {
-  /** WebSocket URL of ZERO's app-server (`codex app-server --listen ws://IP:PORT`). */
-  zeroWsUrl: string;
+  /** Public, same-origin path of the ZERO runtime socket. Never a host:port. */
+  zeroWsPath: string;
+  /** Public, same-origin path of HWD-ZERO's operator event stream. */
+  zeroEventsPath: string;
+  /** Public, same-origin base for every HTTP call. */
+  apiBase: string;
   clientName: string;
   clientVersion: string;
   /** Opt into ZERO's experimental API (required for thread realtime / voice). */
@@ -105,7 +115,12 @@ export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
       : 'zero-realtime';
 
   return {
-    zeroWsUrl: readString(env, 'VITE_ZERO_WS_URL', 'ws://127.0.0.1:8787'),
+    // Fixed public paths. Intentionally not overridable from the environment:
+    // an env var here is exactly how `ws://127.0.0.1:8787` got into the
+    // browser bundle in the first place.
+    zeroWsPath: ZERO_RUNTIME_WS_PATH,
+    zeroEventsPath: ZERO_EVENTS_WS_PATH,
+    apiBase: ZERO_API_BASE,
     clientName: readString(env, 'VITE_ZERO_CLIENT_NAME', 'brain_interface'),
     clientVersion: readString(env, 'VITE_ZERO_CLIENT_VERSION', '0.1.0'),
     experimentalApi: readBoolean(env, 'VITE_ZERO_EXPERIMENTAL_API', true),

@@ -127,18 +127,32 @@ Whenever a ZERO API is missing or fails, the interface adds a note (see
 ```bash
 cd brain-interface
 npm install
-cp .env.example .env.local   # then adjust VITE_ZERO_WS_URL if needed
+cp .env.example .env.local   # then set ZERO_API_URL / ZERO_RUNTIME_WS_URL if they differ
 ```
 
 ## Environment
 
-All variables are read at build/dev time by Vite and documented in
-`.env.example`. No secrets belong in this repository — ZERO owns every upstream
-credential.
+`VITE_*` variables are read at build/dev time by Vite and end up **inside the
+browser bundle**. `ZERO_*` variables are read by the gateway process and never
+reach the browser. No secrets belong in this repository — ZERO owns every
+upstream credential.
+
+There is deliberately **no** variable for ZERO's address. The interface derives
+`/api` and `/ws` from the origin that served it, so the same build works on the
+laptop, over the LAN and behind HTTPS without a change. See
+[`docs/ZERO_SAME_ORIGIN_GATEWAY.md`](docs/ZERO_SAME_ORIGIN_GATEWAY.md).
+
+| Gateway variable | Default | Meaning |
+| --- | --- | --- |
+| `ZERO_UI_PORT` | `3000` | The single port a browser needs |
+| `ZERO_API_URL` | `http://127.0.0.1:8000` | HWD-ZERO's HTTP API, loopback only |
+| `ZERO_RUNTIME_WS_URL` | `ws://127.0.0.1:8787` | ZERO runtime app-server, loopback only |
+| `ZERO_LAN_MODE` | `false` | Bind the gateway (only the gateway) to `0.0.0.0` |
+| `ZERO_DIAGNOSTICS` | on locally, off on LAN | Include internal upstreams in `/api/health` |
+| `ZERO_START_CMD` | – | Command `zero-go.sh` uses to start HWD-ZERO |
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VITE_ZERO_WS_URL` | `ws://127.0.0.1:8787` | ZERO app-server WebSocket endpoint |
 | `VITE_ZERO_CLIENT_NAME` | `brain_interface` | Client name sent in `initialize` |
 | `VITE_ZERO_CLIENT_VERSION` | `0.1.0` | Client version sent in `initialize` |
 | `VITE_ZERO_EXPERIMENTAL_API` | `true` | Opt into ZERO's experimental API (required for realtime voice) |
@@ -191,12 +205,21 @@ The gateway is the single origin — port 3000 serves the interface, `/api` and
 `/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
 
 ```bash
+scripts/zero-go.sh           # the one command  → http://127.0.0.1:3000
+scripts/zero-go.sh --lan     # laptop + phone   → prints the detected LAN URL
+
 scripts/setup-zero.sh        # once: install, build, create .env.local
-scripts/start-zero.sh        # laptop only  → http://127.0.0.1:3000
-scripts/start-zero-lan.sh    # laptop + phone (prints the real LAN URL + token)
+scripts/start-zero.sh        # gateway only, loopback
+scripts/start-zero-lan.sh    # gateway only, on the LAN
 scripts/status-zero.sh       # what is actually up
 scripts/stop-zero.sh
 ```
+
+`zero-go.sh` is the canonical start: environment → repositories → ports →
+HWD-ZERO → HWD-ZERO health → interface build → gateway → health through the
+gateway → the URLs, in that order, printing what each step actually found. It
+says `ZERO READY` only when the health probe genuinely came back healthy, and
+`ZERO ONLINE · BACKEND OFFLINE` otherwise. It never prints the token.
 
 `start-zero-lan.sh` checks RAM, port and HWD-ZERO reachability, then prints the
 **detected** LAN address — never an example IP. The phone opens that URL with
@@ -205,14 +228,46 @@ the `?token=…` it prints; the token is generated on first run into
 
 LAN access is deliberately the boundary: no tunnel, no UPnP, no port forwarding.
 
+### What the interface is allowed to claim
+
+`UI LOADED ≠ ZERO READY`. The ZERO panel reports a real state, never "the
+bundle rendered":
+
+| state | meaning |
+| --- | --- |
+| `STARTING` | asking the gateway what is running |
+| `CONNECTING` | gateway answered, chain not established yet |
+| `AUTH_REQUIRED` | this origin needs the pairing token |
+| `BACKEND_OFFLINE` | gateway healthy, **HWD-ZERO not reachable** |
+| `BACKEND_CONNECTED` | socket open, first real answer still pending |
+| `DEGRADED` | HTTP health fine, an event stream is down |
+| `SAFE_MODE` | reachable, and the kill switch refuses execution |
+| `READY` | HTTP health **and** open socket **and** a real answer from ZERO |
+| `ERROR` | the gateway on this origin stopped answering |
+
+`READY` needs all three facts simultaneously — see
+[`docs/ZERO_SAME_ORIGIN_GATEWAY.md`](docs/ZERO_SAME_ORIGIN_GATEWAY.md).
+
+### Microphone over the LAN
+
+Browsers grant `getUserMedia` only in a secure context. `localhost` qualifies;
+a plain `http://192.168.x.x` address generally does not — so on the Galaxy the
+microphone may be refused even while ZERO is perfectly connected. Text input
+drives the identical pipeline, so nothing is blocked. Putting the gateway
+behind TLS restores it, and the interface needs no change: an `https:` page
+automatically opens `wss://`.
+
 ## Development
 
 ### 1. Start the ZERO backend
 
-ZERO is the Codex agent runtime that lives next to this repository. Build the
-app-server once and run it with the WebSocket transport:
+Two upstreams, both on loopback, both configured in one place each:
 
 ```bash
+# HWD-ZERO's HTTP API + operator event stream  → ZERO_API_URL
+# (see docs/ZERO_SAME_ORIGIN_GATEWAY.md for the contract it must expose)
+
+# ZERO's runtime app-server                    → ZERO_RUNTIME_WS_URL
 cd ../Codex/codex-rs
 cargo build --release -p codex-app-server --bin codex-app-server
 ./target/release/codex-app-server --listen ws://127.0.0.1:8787
@@ -220,20 +275,23 @@ cargo build --release -p codex-app-server --bin codex-app-server
 
 On Linux the build needs `libcap` headers (`apt-get install libcap-dev pkg-config`).
 
-The default transport of `codex app-server` is stdio; the interface needs the
-WebSocket transport, which is why `--listen ws://IP:PORT` is required. ZERO
-binds loopback only. Port `8787` is a free port on this machine — any port
-works, as long as `VITE_ZERO_WS_URL` matches.
-
-**ZERO backend URL:** `ws://127.0.0.1:8787`
+The default transport of `codex app-server` is stdio; the gateway needs the
+WebSocket transport, which is why `--listen ws://IP:PORT` is required. Any port
+works as long as `ZERO_RUNTIME_WS_URL` matches — and note where that value is
+read: by the **gateway**, never by the browser.
 
 ### 2. Start the Brain Interface
 
 ```bash
-npm run dev
+scripts/zero-go.sh
 ```
 
 **Local URL:** http://127.0.0.1:3000
+**From a second device:** `http://<the LAN IP zero-go.sh --lan printed>:3000`
+
+For frontend work without the gateway, `npm run dev` also serves port 3000 and
+proxies `/api` and `/ws` to the same two upstreams, so the browser stays
+same-origin in development too.
 
 Port 3000 is a hard requirement, so `strictPort` is enabled: if something else
 already listens on 3000, the dev server fails with

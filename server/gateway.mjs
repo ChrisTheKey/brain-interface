@@ -1,26 +1,33 @@
 #!/usr/bin/env node
 /**
- * ZERO Gateway.
- *
- * One origin for laptop and phone:
+ * ZERO Gateway — the single origin.
  *
  *     Galaxy / laptop browser
- *              │  http://<host>:3000
+ *              │  http(s)://<host>:3000        ← the only address a browser needs
  *              ▼
  *        ZERO GATEWAY  ──  /            → the built brain interface
- *              │           /api/*       → HWD-ZERO API   (127.0.0.1 only)
- *              │           /ws/*        → HWD-ZERO events (127.0.0.1 only)
+ *              │           /api/health  → composite health (gateway + upstreams)
+ *              │           /api/*       → HWD-ZERO HTTP API   (loopback only)
+ *              │           /ws          → ZERO runtime socket (loopback only)
+ *              │           /ws/events   → HWD-ZERO event stream (loopback only)
  *              ▼
- *        HWD-ZERO (127.0.0.1:8000)
+ *        HWD-ZERO + ZERO runtime, both on 127.0.0.1
+ *
+ * Why this exists at all: `127.0.0.1` means *this device*. A bundle that dials
+ * `ws://127.0.0.1:8787` works on the laptop that runs ZERO and fails on every
+ * other device, because on the Samsung Galaxy that address is the phone. The
+ * gateway removes the question — the browser talks to whatever origin served
+ * it, and only the gateway knows where ZERO actually lives.
  *
  * Rules this file enforces:
  *   - Only the gateway may listen on the LAN, and only with ZERO_LAN_MODE=true.
  *   - Upstream ZERO, Ollama and every child agent stay on loopback.
  *   - LAN access requires a token that is generated on first run, stored with
  *     0600 permissions outside the repository and never baked into the bundle.
+ *   - `/ws` is a real WebSocket upgrade, proxied end to end. Never polling.
  *   - No tunnels, no UPnP, no port forwarding — LAN is as far as this goes.
  */
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { connect as netConnect } from 'node:net';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
@@ -32,7 +39,30 @@ const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..');
 
 export const DEFAULT_PORT = 3000;
+
+/**
+ * HWD-ZERO's HTTP API on loopback.
+ *
+ * Not guessed: this mirrors `src/hwd/client.ts`, whose request shapes are
+ * taken from HWD-ZERO's `zero/api/`. The value is a single configuration
+ * point (`ZERO_API_URL`) precisely because the port is a property of the
+ * deployment, not of this bundle — change it in one place and nothing in the
+ * browser has to know.
+ */
 export const DEFAULT_ZERO_API = 'http://127.0.0.1:8000';
+
+/**
+ * ZERO's runtime socket on loopback (`codex app-server --listen ws://IP:PORT`).
+ * Separate from the HTTP API because it is genuinely a different upstream on a
+ * different port — collapsing the two would be exactly the kind of port
+ * assumption that broke this before.
+ */
+export const DEFAULT_ZERO_RUNTIME_WS = 'ws://127.0.0.1:8787';
+
+/** Public paths. The browser knows these and nothing else. */
+export const PUBLIC_API_BASE = '/api';
+export const PUBLIC_WS_PATH = '/ws';
+export const PUBLIC_EVENTS_WS_PATH = '/ws/events';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -49,21 +79,37 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
-/** Routes that never require a token (needed to render the login screen). */
-const PUBLIC_PATHS = new Set(['/api/gateway/health']);
+/**
+ * Routes that never require a token.
+ *
+ * Health has to be public: without it a phone that is not paired yet cannot
+ * tell "wrong token" from "backend down", and would show the wrong state for
+ * the wrong reason. It reveals no internal address unless diagnostics are on.
+ */
+const PUBLIC_PATHS = new Set(['/api/health', '/api/gateway/health']);
 
 export function readConfig(env = process.env) {
   const lanMode = String(env.ZERO_LAN_MODE ?? '').toLowerCase() === 'true';
+  const diagnosticsRaw = env.ZERO_DIAGNOSTICS;
   return {
     port: Number(env.ZERO_UI_PORT ?? DEFAULT_PORT),
     // LAN mode is the only way to leave loopback, and it is explicit.
     host: lanMode ? '0.0.0.0' : '127.0.0.1',
     lanMode,
     zeroApi: env.ZERO_API_URL ?? DEFAULT_ZERO_API,
+    zeroRuntimeWs: env.ZERO_RUNTIME_WS_URL ?? DEFAULT_ZERO_RUNTIME_WS,
     distDir: env.ZERO_UI_DIST ?? join(projectRoot, 'dist'),
     tokenFile: env.ZERO_TOKEN_FILE ?? join(projectRoot, '.zero', 'gateway-token'),
     // Requests per minute per client address.
     rateLimit: Number(env.ZERO_RATE_LIMIT ?? 240),
+    // Internal host:port details are development diagnostics. On the LAN they
+    // stay off by default: a paired phone has no business learning the
+    // topology behind the gateway.
+    diagnostics:
+      diagnosticsRaw === undefined
+        ? !lanMode
+        : String(diagnosticsRaw).toLowerCase() === 'true',
+    healthTimeoutMs: Number(env.ZERO_HEALTH_TIMEOUT_MS ?? 2_000),
   };
 }
 
@@ -140,6 +186,37 @@ export function resolveStaticPath(distDir, urlPath) {
   return candidate;
 }
 
+/**
+ * Which upstream a WebSocket upgrade belongs to.
+ *
+ * Two public sockets, two different upstreams, and `/ws/events` is a prefix of
+ * `/ws` — so the match is exact rather than `startsWith`, or every operator
+ * event would be piped into the runtime port.
+ */
+export function resolveWsRoute(pathname, config) {
+  if (pathname === PUBLIC_EVENTS_WS_PATH) {
+    return { target: config.zeroApi, path: PUBLIC_EVENTS_WS_PATH, upstream: 'zeroApi' };
+  }
+  if (pathname === PUBLIC_WS_PATH || pathname === `${PUBLIC_WS_PATH}/`) {
+    // The runtime URL carries its own path (`ws://host:port/` for
+    // codex app-server); the public `/ws` is a gateway name, not an upstream one.
+    const upstreamPath = new URL(config.zeroRuntimeWs).pathname || '/';
+    return { target: config.zeroRuntimeWs, path: upstreamPath, upstream: 'zeroRuntimeWs' };
+  }
+  return null;
+}
+
+/** host/port of an http(s):// or ws(s):// upstream, with the right default port. */
+export function upstreamAddress(target) {
+  const url = new URL(target);
+  const secure = url.protocol === 'https:' || url.protocol === 'wss:';
+  return {
+    hostname: url.hostname,
+    port: Number(url.port || (secure ? 443 : 80)),
+    secure,
+  };
+}
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -163,49 +240,183 @@ function sendFile(res, filePath) {
 }
 
 function proxyHttp(req, res, target, pathname, search) {
-  const upstream = new URL(target);
+  const { hostname, port } = upstreamAddress(target);
   const options = {
-    hostname: upstream.hostname,
-    port: upstream.port || 80,
+    hostname,
+    port,
     path: `${pathname}${search}`,
     method: req.method,
-    headers: { ...req.headers, host: upstream.host },
+    headers: { ...req.headers, host: `${hostname}:${port}` },
   };
   // The gateway's own token never travels upstream.
   delete options.headers.authorization;
   delete options.headers.cookie;
 
-  import('node:http').then(({ request }) => {
-    const proxied = request(options, (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-      upstreamRes.pipe(res);
-    });
-    proxied.on('error', (error) => {
-      sendJson(res, 502, {
-        error: 'zero_api_unreachable',
-        message: `HWD-ZERO is not reachable at ${target}: ${error.message}`,
-      });
-    });
-    req.pipe(proxied);
+  const proxied = httpRequest(options, (upstreamRes) => {
+    res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+    upstreamRes.pipe(res);
   });
+  proxied.on('error', (error) => {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    sendJson(res, 502, {
+      error: 'zero_api_unreachable',
+      message: `HWD-ZERO is not reachable at ${target}: ${error.message}`,
+    });
+  });
+  req.pipe(proxied);
 }
 
-/** Raw TCP pipe for the WebSocket upgrade to ZERO's event stream. */
+/**
+ * Real WebSocket upgrade proxying: a raw TCP pipe carrying the client's own
+ * `Upgrade` request upstream, so the 101 handshake, the negotiated
+ * subprotocol and every frame afterwards are the upstream's, unmodified.
+ *
+ * Deliberately not "polling that looks like a socket": ZERO pushes events, and
+ * a poll would turn a live brain into a stuttering one.
+ */
 function proxyUpgrade(req, socket, head, target, pathname, search) {
-  const upstream = new URL(target);
-  const client = netConnect(Number(upstream.port || 80), upstream.hostname, () => {
+  const { hostname, port } = upstreamAddress(target);
+  socket.setNoDelay?.(true);
+  const client = netConnect(port, hostname, () => {
     const headers = Object.entries(req.headers)
       .filter(([key]) => key !== 'authorization' && key !== 'cookie')
-      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`);
-    client.write(
-      `${req.method} ${pathname}${search} HTTP/1.1\r\n${headers.join('\r\n')}\r\n\r\n`,
-    );
+      .map(([key, value]) =>
+        key.toLowerCase() === 'host'
+          ? `host: ${hostname}:${port}`
+          : `${key}: ${Array.isArray(value) ? value.join(', ') : value}`,
+      );
+    client.write(`${req.method} ${pathname}${search} HTTP/1.1\r\n${headers.join('\r\n')}\r\n\r\n`);
     if (head?.length) client.write(head);
     client.pipe(socket);
     socket.pipe(client);
   });
-  client.on('error', () => socket.destroy());
+  client.setNoDelay?.(true);
+  client.on('error', (error) => {
+    // Say why, once, before closing: a socket that just vanishes is
+    // indistinguishable from a bug in the browser.
+    if (!socket.destroyed) {
+      socket.write(
+        'HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\n\r\n' +
+          `ZERO upstream ${target} is not reachable: ${error.message}`,
+      );
+      socket.destroy();
+    }
+  });
   socket.on('error', () => client.destroy());
+  return client;
+}
+
+/**
+ * Is HWD-ZERO's HTTP API answering right now?
+ *
+ * A real request with a real timeout — the gateway never reports a backend as
+ * healthy because it once was.
+ */
+export function probeHttp(target, path, timeoutMs = 2_000) {
+  return new Promise((resolveProbe) => {
+    let settled = false;
+    const finish = (ok, detail) => {
+      if (settled) return;
+      settled = true;
+      resolveProbe({ ok, detail });
+    };
+    let req;
+    try {
+      const { hostname, port } = upstreamAddress(target);
+      req = httpRequest({ hostname, port, path, method: 'GET' }, (res) => {
+        res.resume();
+        const status = res.statusCode ?? 0;
+        finish(status > 0 && status < 500, `HTTP ${status}`);
+      });
+    } catch (error) {
+      finish(false, error.message);
+      return;
+    }
+    req.on('error', (error) => finish(false, error.message));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      finish(false, `no answer within ${timeoutMs}ms`);
+    });
+    req.end();
+  });
+}
+
+/**
+ * Is the runtime WebSocket upstream accepting connections?
+ *
+ * A TCP connect, not a full handshake: it answers exactly the question the
+ * health payload claims to answer ("is something listening there") without
+ * opening and abandoning a real ZERO session on every poll.
+ */
+export function probeSocket(target, timeoutMs = 2_000) {
+  return new Promise((resolveProbe) => {
+    let settled = false;
+    const finish = (ok, detail) => {
+      if (settled) return;
+      settled = true;
+      resolveProbe({ ok, detail });
+    };
+    let socket;
+    try {
+      const { hostname, port } = upstreamAddress(target);
+      socket = netConnect(port, hostname, () => {
+        socket.destroy();
+        finish(true, `tcp ${hostname}:${port} accepting`);
+      });
+    } catch (error) {
+      finish(false, error.message);
+      return;
+    }
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy();
+      finish(false, `no answer within ${timeoutMs}ms`);
+    });
+    socket.on('error', (error) => finish(false, error.message));
+  });
+}
+
+/**
+ * The composite health payload.
+ *
+ * Three independent facts, kept apart on purpose. "The gateway is up" is not
+ * "ZERO is up", and neither of them is "the event stream works" — the
+ * interface needs all three to decide whether it may say READY.
+ */
+export async function collectHealth(config, extra = {}) {
+  const [zero, websocket] = await Promise.all([
+    probeHttp(config.zeroApi, '/api/health', config.healthTimeoutMs),
+    probeSocket(config.zeroRuntimeWs, config.healthTimeoutMs),
+  ]);
+
+  const body = {
+    gateway: 'healthy',
+    zero: zero.ok ? 'healthy' : 'offline',
+    websocket: websocket.ok ? 'healthy' : 'offline',
+    lanMode: config.lanMode,
+    authRequired: config.lanMode,
+    publicPaths: {
+      api: PUBLIC_API_BASE,
+      ws: PUBLIC_WS_PATH,
+      events: PUBLIC_EVENTS_WS_PATH,
+    },
+    ...extra,
+  };
+
+  if (config.diagnostics) {
+    body.diagnostics = {
+      zeroApi: config.zeroApi,
+      zeroRuntimeWs: config.zeroRuntimeWs,
+      zeroDetail: zero.detail,
+      websocketDetail: websocket.detail,
+    };
+  }
+
+  // 200 only when the whole chain is up. A degraded gateway must be visible to
+  // `curl` and to shell scripts, not only to a human reading JSON.
+  return { status: zero.ok ? 200 : 503, body };
 }
 
 export function startGateway(config = readConfig()) {
@@ -231,12 +442,13 @@ export function startGateway(config = readConfig()) {
     }
 
     if (PUBLIC_PATHS.has(url.pathname)) {
-      sendJson(res, 200, {
-        gateway: 'ok',
-        lanMode: config.lanMode,
-        zeroApi: config.zeroApi,
-        authRequired: config.lanMode,
-      });
+      // The pairing state is a fact about *this* caller, so an already paired
+      // phone is not told it still needs a token.
+      collectHealth(config, { authRequired: config.lanMode && !authorize(req, url) })
+        .then(({ status, body }) => sendJson(res, status, body))
+        .catch((error) =>
+          sendJson(res, 500, { gateway: 'healthy', error: 'health_failed', message: error.message }),
+        );
       return;
     }
 
@@ -273,7 +485,7 @@ export function startGateway(config = readConfig()) {
       );
     }
 
-    if (url.pathname.startsWith('/api/')) {
+    if (url.pathname.startsWith(`${PUBLIC_API_BASE}/`)) {
       proxyHttp(req, res, config.zeroApi, url.pathname, url.search);
       return;
     }
@@ -297,32 +509,40 @@ export function startGateway(config = readConfig()) {
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    if (!url.pathname.startsWith('/ws')) {
+    const route = resolveWsRoute(url.pathname, config);
+    if (!route) {
+      socket.write('HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
     if (!authorize(req, url)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.write('HTTP/1.1 401 Unauthorized\r\nconnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
-    proxyUpgrade(req, socket, head, config.zeroApi, url.pathname, url.search);
+    // The pairing token is a gateway credential and stops here; upstream sees
+    // a plain upgrade from loopback.
+    const search = url.search.replace(/([?&])token=[^&]*&?/, '$1').replace(/[?&]$/, '');
+    proxyUpgrade(req, socket, head, route.target, route.path, search);
   });
 
   server.listen(config.port, config.host, () => {
     const lan = detectLanAddress();
     process.stdout.write('\nZERO GATEWAY ONLINE\n\n');
-    process.stdout.write(`LAPTOP:   http://127.0.0.1:${config.port}\n`);
+    process.stdout.write(`LOCAL:    http://127.0.0.1:${config.port}\n`);
     if (config.lanMode) {
       process.stdout.write(
         lan
-          ? `MOBILE:   http://${lan}:${config.port}/?token=${token}\n`
-          : 'MOBILE:   no LAN address detected — is the laptop connected to a network?\n',
+          ? `LAN:      http://${lan}:${config.port}/?token=${token}\n`
+          : 'LAN:      no LAN address detected — is the laptop connected to a network?\n',
       );
     } else {
-      process.stdout.write('MOBILE:   disabled (start with ZERO_LAN_MODE=true)\n');
+      process.stdout.write('LAN:      disabled (start with ZERO_LAN_MODE=true)\n');
     }
-    process.stdout.write(`ZERO API: ${config.zeroApi} (loopback only)\n`);
+    process.stdout.write(`ZERO API: ${PUBLIC_API_BASE} → ${config.zeroApi} (loopback only)\n`);
+    process.stdout.write(
+      `EVENTS:   ${PUBLIC_WS_PATH} → ${config.zeroRuntimeWs} (loopback only)\n`,
+    );
     process.stdout.write(`TOKEN:    ${config.tokenFile}\n\n`);
   });
 
