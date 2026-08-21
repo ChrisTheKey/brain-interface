@@ -4,6 +4,7 @@ import { onNetworkWake } from '../zero/lifecycle';
 import type { HwdZeroClient } from '../hwd/client';
 import type {
   OperatorApproval,
+  RuntimeReadyPayload,
   OperatorConnection,
   OperatorEvent,
   OperatorMission,
@@ -37,6 +38,16 @@ export interface OperatorView {
   runningMissionIds: string[];
   /** True once HWD-ZERO returned real operator state — not merely "socket open". */
   responded: boolean;
+  /**
+   * True once `zero.runtime.ready` arrived on the event stream.
+   *
+   * HWD-ZERO sends it to every subscriber as the first frame, so this is the
+   * runtime itself confirming it is assembled — the difference between an open
+   * socket and a working stream.
+   */
+  runtimeAnnounced: boolean;
+  /** What the runtime said about itself, or null before it has spoken. */
+  runtime: RuntimeReadyPayload | null;
   safeMode: boolean;
   refresh: () => Promise<void>;
   startMission: (task: string) => Promise<void>;
@@ -67,6 +78,7 @@ export function useOperator(
   const [tasks, setTasks] = useState<OperatorTask[]>([]);
   const [events, setEvents] = useState<OperatorEvent[]>([]);
   const [responded, setResponded] = useState(false);
+  const [runtime, setRuntime] = useState<RuntimeReadyPayload | null>(null);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -113,9 +125,20 @@ export function useOperator(
         setConnection('open');
         setError('');
       },
-      onClose: () => setConnection('closed'),
+      onClose: () => {
+        setConnection('closed');
+        // A closed stream is not a runtime that announced itself. Keeping the
+        // flag would let the panel claim FULL coverage over a dead socket.
+        setRuntime(null);
+      },
       onError: (message) => setError(message),
       onEvent: (event) => {
+        if (event.type === 'zero.runtime.ready') {
+          // The runtime describing itself. Recorded separately from the event
+          // list because it is state, not history: a reconnect re-announces,
+          // and the newest answer is the true one.
+          setRuntime(event.payload as unknown as RuntimeReadyPayload);
+        }
         setEvents((current) => {
           // The server replays its buffer on reconnect, so an event we already
           // hold arrives again. The id decides, not the arrival order.
@@ -207,6 +230,8 @@ export function useOperator(
     events,
     runningMissionIds,
     responded,
+    runtimeAnnounced: runtime !== null && runtime.healthy !== false,
+    runtime,
     safeMode: state?.safe_mode ?? false,
     refresh,
     startMission,

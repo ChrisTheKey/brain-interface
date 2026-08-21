@@ -11,10 +11,13 @@ import type { VoiceState } from '../voice/service';
 
 export interface ZeroPanelProps {
   status: ZeroStatusView;
-  /** Agents HWD-ZERO's registry reports, or null while it has not answered. */
-  registeredAgents: number | null;
-  /** Agents ZERO's own runtime snapshot reports. */
-  runtimeAgents: number | null;
+  /**
+   * Child agents actually discovered on disk, against the number the policy
+   * allows. Deliberately not HWD-ZERO's role registry: those six entries are
+   * ZERO's own roles and executors, and showing them here is what put
+   * "6 REGISTERED" next to a policy that names eight.
+   */
+  childAgents: { discovered: number; allowed: number; missing: string[] } | null;
   voiceState: VoiceState;
   onRetry: () => void;
   /** Development diagnostics only; internal addresses never ship to the LAN. */
@@ -32,8 +35,7 @@ function Row({ label, value, tone }: { label: string; value: string; tone: strin
 
 export function ZeroPanel({
   status,
-  registeredAgents,
-  runtimeAgents,
+  childAgents,
   voiceState,
   onRetry,
   showDiagnostics,
@@ -41,15 +43,19 @@ export function ZeroPanel({
   const health = status.health;
 
   const zeroTone = health?.zero === 'healthy' ? 'ok' : health ? 'bad' : 'wait';
-  const streamTone = status.ready
-    ? 'ok'
-    : status.state === 'BACKEND_CONNECTED'
-      ? 'ok'
-      : status.state === 'DEGRADED'
-        ? 'warn'
-        : 'bad';
+  const streamTone =
+    status.eventStream === 'full' ? 'ok' : status.eventStream === 'partial' ? 'warn' : 'bad';
+  const runtimeTone =
+    status.runtime === 'online' ? 'ok' : status.runtime === 'unknown' ? 'wait' : 'bad';
 
-  const agentCount = registeredAgents ?? runtimeAgents;
+  // "N of M" whenever the two differ, so a shortfall is visible rather than
+  // rounded away into a number that looks complete.
+  const agentValue =
+    childAgents === null
+      ? 'DISCOVERING'
+      : childAgents.discovered === childAgents.allowed
+        ? `${childAgents.discovered} REGISTERED`
+        : `${childAgents.discovered}/${childAgents.allowed} DISCOVERED`;
 
   return (
     <section className={`zero-panel zero-panel-${status.state.toLowerCase()}`} aria-label="ZERO">
@@ -70,31 +76,35 @@ export function ZeroPanel({
         />
         <Row
           label="EVENT STREAM"
-          value={
-            status.state === 'READY' || status.state === 'BACKEND_CONNECTED'
-              ? 'CONNECTED'
-              : status.state === 'DEGRADED'
-                ? 'PARTIAL'
-                : 'DISCONNECTED'
-          }
+          value={status.eventStream.toUpperCase()}
           tone={streamTone}
         />
         {/*
-          Only shown when a runtime app-server is actually configured. A row
-          reading "OFFLINE" for a component this deployment never runs is a
-          false alarm, and a phone is exactly such a deployment.
+          The canonical runtime: HWD-ZERO's ZeroSession. Never an executor —
+          this row said OFFLINE while HWD-ZERO was perfectly healthy, because
+          it was reporting an optional codex app-server instead.
         */}
-        {health?.runtimeConfigured ? (
-          <Row
-            label="ZERO RUNTIME"
-            value={health.websocket === 'healthy' ? 'CONNECTED' : 'OFFLINE'}
-            tone={health.websocket === 'healthy' ? 'ok' : 'warn'}
-          />
-        ) : null}
+        <Row
+          label="ZERO RUNTIME"
+          value={
+            status.runtime === 'online'
+              ? 'ONLINE'
+              : status.runtime === 'unknown'
+                ? 'PROBING'
+                : 'OFFLINE'
+          }
+          tone={runtimeTone}
+        />
         <Row
           label="AGENTS"
-          value={agentCount === null ? 'UNKNOWN' : `${agentCount} REGISTERED`}
-          tone={agentCount ? 'ok' : 'wait'}
+          value={agentValue}
+          tone={
+            childAgents === null
+              ? 'wait'
+              : childAgents.discovered === childAgents.allowed
+                ? 'ok'
+                : 'warn'
+          }
         />
         <Row
           label="VOICE"
@@ -102,6 +112,32 @@ export function ZeroPanel({
           tone={voiceState === 'unavailable' ? 'warn' : 'ok'}
         />
       </ul>
+
+      {/*
+        An optional executor, shown only when one is configured. A row reading
+        OFFLINE for something this deployment never runs is a false alarm, and
+        a phone is exactly such a deployment.
+      */}
+      {status.codexExecutor !== 'not_configured' ? (
+        <ul className="zero-rows">
+          <Row
+            label="CODEX EXECUTOR"
+            value={status.codexExecutor === 'online' ? 'ONLINE' : 'OFFLINE'}
+            tone={status.codexExecutor === 'online' ? 'ok' : 'warn'}
+          />
+        </ul>
+      ) : null}
+
+      {childAgents && childAgents.missing.length > 0 ? (
+        <details className="zero-diagnostics">
+          <summary>{childAgents.missing.length} not found</summary>
+          <ul>
+            {childAgents.missing.map((name) => (
+              <li key={name}>{name}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       {status.retryable ? (
         <button type="button" className="zero-retry" onClick={onRetry}>

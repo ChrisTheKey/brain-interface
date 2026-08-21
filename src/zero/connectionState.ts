@@ -11,8 +11,15 @@
  * `READY` requires three independent facts at the same time:
  *
  *   1. the gateway's HTTP health probe reaches HWD-ZERO,
- *   2. the WebSocket is actually open through the same origin,
- *   3. ZERO itself answered with real payload (a snapshot or operator state).
+ *   2. the same-origin `/ws/events` socket is open, and
+ *   3. the canonical runtime answered — `zero.runtime.ready` on that stream.
+ *
+ * What is deliberately *not* in that list: the codex app-server. ZERO's
+ * runtime is HWD-ZERO's `ZeroSession` — brain, missions, policy, verification,
+ * child agents. Codex, Claude and Ollama are executors ZERO may drive. Treating
+ * an executor as the runtime is what made the panel say `ZERO RUNTIME OFFLINE`
+ * while HWD-ZERO was perfectly healthy, and it made READY unreachable on any
+ * device that will never run codex.
  *
  * Anything less is named for what it is, so the operator sees the truth
  * instead of a spinner.
@@ -30,8 +37,17 @@ export type ZeroState =
   | 'ERROR'
   | 'SAFE_MODE';
 
-/** What the gateway itself reports about the two upstreams. */
+/** What the gateway itself reports about an upstream. */
 export type ProbeResult = 'unknown' | 'healthy' | 'offline';
+
+/** How much of ZERO's event stream is actually working. */
+export type EventStreamLevel = 'offline' | 'partial' | 'full';
+
+/** The canonical runtime — HWD-ZERO's ZeroSession, never an executor. */
+export type RuntimeLevel = 'unknown' | 'online' | 'offline';
+
+/** An optional executor ZERO may drive. Never part of READY. */
+export type ExecutorLevel = 'not_configured' | 'online' | 'offline';
 
 /** Runtime socket state, mirroring `ZeroClient`. */
 export type SocketState = 'idle' | 'connecting' | 'connected' | 'disconnected';
@@ -48,17 +64,23 @@ export interface ZeroStatusInput {
   authRequired: boolean;
   /** HWD-ZERO's HTTP health, as seen by the gateway (never by the browser). */
   zeroHttp: ProbeResult;
-  /** ZERO runtime socket, through `/ws`. */
-  runtimeSocket: SocketState;
   /**
-   * Is a codex runtime app-server configured at all?
+   * The optional codex executor's socket, through `/ws`.
    *
-   * It drives the brain graph and realtime voice, and it is genuinely
-   * optional — a phone running HWD-ZERO under Termux has no reason to run one.
-   * When it is absent, its socket must not hold the interface below READY;
-   * when it is configured and down, that is a real degradation.
+   * Reported, never required. It is one of several executors ZERO may drive,
+   * and a phone running HWD-ZERO under Termux will never have one.
    */
-  runtimeConfigured: boolean;
+  codexSocket: SocketState;
+  /** Is a codex executor configured at all? */
+  codexConfigured: boolean;
+  /**
+   * Did the canonical runtime announce itself on `/ws/events`?
+   *
+   * This is the `zero.runtime.ready` frame HWD-ZERO sends to every subscriber
+   * the moment it connects. It is the difference between a socket that is open
+   * and a stream that is working.
+   */
+  runtimeAnnounced: boolean;
   /** Operator event stream, through `/ws/events`. */
   eventStream: StreamState;
   /** True once ZERO's runtime returned a real snapshot. */
@@ -88,8 +110,9 @@ export const ZERO_STATUS_DEFAULTS: ZeroStatusInput = {
   gateway: 'unknown',
   authRequired: false,
   zeroHttp: 'unknown',
-  runtimeSocket: 'idle',
-  runtimeConfigured: false,
+  codexSocket: 'idle',
+  codexConfigured: false,
+  runtimeAnnounced: false,
   eventStream: 'connecting',
   runtimeResponded: false,
   operatorResponded: false,
@@ -98,25 +121,48 @@ export const ZERO_STATUS_DEFAULTS: ZeroStatusInput = {
 };
 
 /**
- * The stream that matters.
+ * The stream that matters: HWD-ZERO's own `/ws/events`.
  *
- * HWD-ZERO's operator events are what make the brain move; the codex runtime
- * socket is a second, optional source. READY therefore turns on the operator
- * stream, not on both — otherwise a deployment that never runs a codex
- * app-server (every phone) could never reach READY no matter how healthy the
- * operator is.
+ * READY turns on this one and nothing else. A deployment that never runs a
+ * codex app-server — every phone — must still be able to reach READY.
  */
 function operatorStreamOpen(input: ZeroStatusInput): boolean {
   return input.eventStream === 'open';
 }
 
-/** A configured runtime that is not connected — a real, reportable degradation. */
-function runtimeMissing(input: ZeroStatusInput): boolean {
-  return input.runtimeConfigured && input.runtimeSocket !== 'connected';
-}
-
 function backendResponded(input: ZeroStatusInput): boolean {
   return input.runtimeResponded || input.operatorResponded;
+}
+
+/**
+ * How complete the event stream is.
+ *
+ * `full` means the socket is open *and* the runtime announced itself on it —
+ * complete event coverage, so missions, agents and approvals all arrive here.
+ * `partial` is an open socket that has not spoken yet. An optional executor's
+ * separate socket has nothing to do with either.
+ */
+export function eventStreamLevel(input: ZeroStatusInput): EventStreamLevel {
+  if (!operatorStreamOpen(input)) return 'offline';
+  return input.runtimeAnnounced ? 'full' : 'partial';
+}
+
+/**
+ * Is the canonical runtime up?
+ *
+ * HWD-ZERO healthy, plus the runtime having announced itself over the stream.
+ * `ZeroSession` is the runtime; no executor appears in this answer.
+ */
+export function runtimeLevel(input: ZeroStatusInput): RuntimeLevel {
+  if (input.zeroHttp === 'unknown') return 'unknown';
+  if (input.zeroHttp !== 'healthy') return 'offline';
+  return input.runtimeAnnounced && operatorStreamOpen(input) ? 'online' : 'offline';
+}
+
+/** The optional codex executor. Reported for the operator, never a gate. */
+export function codexExecutorLevel(input: ZeroStatusInput): ExecutorLevel {
+  if (!input.codexConfigured) return 'not_configured';
+  return input.codexSocket === 'connected' ? 'online' : 'offline';
 }
 
 /**
@@ -191,22 +237,13 @@ export function resolveZeroStatus(partial: Partial<ZeroStatusInput> = {}): ZeroS
     };
   }
 
-  if (operatorStreamOpen(input) && backendResponded(input)) {
-    // A configured runtime that is down still costs the graph and the voice,
-    // so it is named — but it does not turn a working operator into a failure.
-    if (runtimeMissing(input)) {
-      return {
-        state: 'DEGRADED',
-        headline: 'DEGRADED',
-        detail: 'HWD-ZERO is READY. The ZERO runtime app-server is configured but not connected.',
-        ready: false,
-        retryable: true,
-      };
-    }
+  if (runtimeLevel(input) === 'online' && backendResponded(input)) {
+    // A configured codex executor that is down is worth naming somewhere, but
+    // not here: it is one of several executors ZERO may drive, and ZERO is up.
     return {
       state: 'READY',
       headline: 'READY',
-      detail: 'HTTP health, the operator event stream and HWD-ZERO itself all answered.',
+      detail: 'HWD-ZERO is healthy, ZeroSession is online and the event stream is full.',
       ready: true,
       retryable: false,
     };
@@ -216,17 +253,19 @@ export function resolveZeroStatus(partial: Partial<ZeroStatusInput> = {}): ZeroS
     return {
       state: 'BACKEND_CONNECTED',
       headline: 'BACKEND CONNECTED',
-      detail: 'Connected through /ws/events — waiting for the first real answer from ZERO.',
+      detail: input.runtimeAnnounced
+        ? 'The runtime announced itself — waiting for its first state.'
+        : 'Connected through /ws/events — waiting for the runtime to announce itself.',
       ready: false,
       retryable: false,
     };
   }
 
-  if (backendResponded(input) || input.runtimeSocket === 'connected') {
+  if (backendResponded(input)) {
     return {
       state: 'DEGRADED',
       headline: 'DEGRADED',
-      detail: 'HWD-ZERO answers over HTTP, but the same-origin event stream is down.',
+      detail: 'HWD-ZERO answers over HTTP, but its event stream is down.',
       ready: false,
       retryable: true,
     };
@@ -251,7 +290,13 @@ export function resolveZeroStatus(partial: Partial<ZeroStatusInput> = {}): ZeroS
   };
 }
 
-/** Maps the state onto the ZERO node's visual status in the graph. */
+/**
+ * Maps the state onto the ZERO node's visual status in the graph.
+ *
+ * `notLoaded` now means only one thing: no runtime snapshot exists yet. Once
+ * the runtime is online the node says so, rather than describing the absence
+ * of a graph the codex executor would have supplied.
+ */
 export function zeroNodeStatus(state: ZeroState): 'active' | 'idle' | 'error' | 'notLoaded' {
   switch (state) {
     case 'READY':
@@ -266,4 +311,18 @@ export function zeroNodeStatus(state: ZeroState): 'active' | 'idle' | 'error' | 
     default:
       return 'notLoaded';
   }
+}
+
+/** What the ZERO node should be called, given the runtime's real state. */
+export function zeroNodeLabel(runtime: RuntimeLevel, state: ZeroState): string {
+  if (runtime === 'online') return state === 'READY' ? 'READY' : 'ONLINE';
+  if (runtime === 'unknown') return 'connecting';
+  return state === 'BACKEND_OFFLINE' ? 'backend offline' : 'notLoaded';
+}
+
+/** The one-line description under the ZERO node. */
+export function zeroNodeDescription(runtime: RuntimeLevel): string {
+  return runtime === 'online'
+    ? 'Central orchestrator · Runtime ONLINE (ZeroSession)'
+    : 'Central orchestrator (HWD-ZERO · ZeroSession).';
 }

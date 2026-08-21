@@ -8,6 +8,13 @@
 
 /** Interface event vocabulary — the values `zero/api/events.py` emits. */
 export type OperatorEventType =
+  /**
+   * The runtime announcing itself. Sent to every subscriber as the first frame
+   * on `/ws/events`, before any replay — it is what makes the stream *full*
+   * rather than merely open.
+   */
+  | 'zero.runtime.ready'
+  | 'zero.state.changed'
   | 'mission.created'
   | 'mission.planning'
   | 'mission.executing'
@@ -133,12 +140,14 @@ export interface GatewayHealth {
   /** HWD-ZERO's HTTP API, probed by the gateway on loopback. */
   zero: 'healthy' | 'offline';
   /**
-   * The optional codex runtime app-server, probed by the gateway on loopback.
-   * `not_configured` means the deployment does not run one — which is normal
-   * on a phone, and is not a degradation.
+   * The optional codex executor, probed by the gateway on loopback.
+   *
+   * `not_configured` means this deployment runs no codex app-server — normal
+   * on a phone, and never a degradation. ZERO's runtime is HWD-ZERO's
+   * ZeroSession; codex is an executor it may drive.
    */
   websocket: 'healthy' | 'offline' | 'not_configured';
-  /** Whether a runtime app-server is configured at all. */
+  /** Whether a codex executor is configured at all. */
   runtimeConfigured: boolean;
   lanMode: boolean;
   /** True when this origin demands a pairing token the client may not hold. */
@@ -152,4 +161,40 @@ export interface GatewayHealth {
     zeroDetail: string;
     websocketDetail: string;
   };
+}
+
+/**
+ * The payload of `zero.runtime.ready` — HWD-ZERO describing its own runtime.
+ *
+ * `ZeroSession` is the canonical ZERO runtime: brain, missions, policy,
+ * verification, child agents. Codex, Claude and Ollama are executors it may
+ * drive, and none of them appears here.
+ */
+export interface RuntimeReadyPayload {
+  runtime: 'ZeroSession';
+  healthy: boolean;
+  name?: string;
+  ready?: boolean;
+  version?: string;
+  brain_root?: string;
+  brain_revision?: string;
+  sources?: number;
+  /** ZERO's own roles — not the child-agent network. */
+  roles?: string[];
+  projects?: string[];
+}
+
+/** One child-agent repository, as found on disk by the runtime. */
+export interface DiscoveredRepository {
+  name: string;
+  path: string;
+  is_git: boolean;
+  markers: string[];
+}
+
+/** `GET /api/agents/children` — facts about what is on disk, never policy. */
+export interface ChildAgentDiscovery {
+  root: string;
+  exists: boolean;
+  repositories: DiscoveredRepository[];
 }

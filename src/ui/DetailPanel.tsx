@@ -61,7 +61,16 @@ export function DetailPanel({
         <div>
           <h2>{node.label}</h2>
           <p className="detail-type">
-            {node.type} · <span className={`status-${node.status}`}>{node.status}</span>
+            {node.type} ·{' '}
+            {/*
+              A node may carry a state of its own that is more truthful than the
+              graph status. The ZERO node does: `notLoaded` describes a missing
+              snapshot, and reading it as a statement about the runtime is what
+              made this line say "zero · notLoaded" while HWD-ZERO was healthy.
+            */}
+            <span className={`status-${node.status}`}>
+              {typeof node.metadata['state'] === 'string' ? node.metadata['state'] : node.status}
+            </span>
           </p>
         </div>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close details">

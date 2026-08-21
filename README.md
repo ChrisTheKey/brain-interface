@@ -274,8 +274,18 @@ bundle rendered":
 | `READY` | HTTP health **and** open socket **and** a real answer from ZERO |
 | `ERROR` | the gateway on this origin stopped answering |
 
-`READY` needs all three facts simultaneously — see
+`READY` = gateway healthy + HWD-ZERO healthy + `ZeroSession` online +
+`/ws/events` connected. **HWD-ZERO's `ZeroSession` is the canonical ZERO
+runtime**; Codex, Claude and Ollama are executors it may drive, and none of
+them appears in that list — so no codex app-server and no port 8787 is needed
+to reach READY. See
 [`docs/ZERO_SAME_ORIGIN_GATEWAY.md`](docs/ZERO_SAME_ORIGIN_GATEWAY.md).
+
+The `AGENTS` row counts **child agents discovered on disk** against the eight
+the policy allows, reported as `N/8 DISCOVERED` with the missing ones named.
+It is not HWD-ZERO's role registry (`zero`, `codex`, `claude-code`,
+`perplexity`, `checkmate`, `pulse`) — those are ZERO's own roles and executors,
+a different population that used to be shown here by mistake.
 
 ### Microphone over the LAN
 

@@ -65,7 +65,7 @@ remove.
 | --- | --- | --- | --- |
 | `/api/*` | `ZERO_API_URL` | `http://127.0.0.1:8000` | HWD-ZERO's HTTP API |
 | `/ws/events` | `ZERO_API_URL` | same host | HWD-ZERO's operator events |
-| `/ws` | `ZERO_RUNTIME_WS_URL` | `ws://127.0.0.1:8787` | ZERO runtime app-server |
+| `/ws` | `ZERO_RUNTIME_WS_URL` | `ws://127.0.0.1:8787` | optional codex **executor** (never required) |
 
 `/ws/events` is a prefix of `/ws`, so the gateway matches the path **exactly**
 (`resolveWsRoute`) rather than by prefix — otherwise every operator event would
@@ -98,15 +98,44 @@ families**, `127.0.0.1` and `::1`. On Android `localhost` commonly resolves to
 the other from the same device. A host without IPv6 skips the second listener
 and carries on.
 
-### The optional runtime app-server
+### What the runtime is
 
-`ZERO_RUNTIME_WS_URL` points at the codex app-server, which drives the brain
-graph and realtime voice. It is genuinely optional — a phone running HWD-ZERO
-under Termux has no reason to run one — so health reports three values, not
-two: `healthy`, `offline`, and `not_configured`. Only the middle one is a
-degradation, and `READY` turns on HWD-ZERO's own operator stream. Waiting on a
-component the deployment does not run would make `READY` unreachable no matter
-how healthy the operator is.
+**HWD-ZERO's `ZeroSession` is the canonical ZERO runtime** — brain, missions,
+policy, verification, child agents. Codex, Claude and Ollama are *executors*
+ZERO may drive. None of them is ZERO.
+
+This was modelled backwards for a while, and the panel showed the consequence:
+`ZERO RUNTIME OFFLINE` while HWD-ZERO was `HEALTHY`, and `EVENT STREAM PARTIAL`
+because a second, optional socket was missing. Both were reporting the codex
+app-server as though it were the runtime.
+
+| row | means |
+| --- | --- |
+| `HWD-ZERO` | the gateway's HTTP probe of `ZERO_API_URL` |
+| `ZERO RUNTIME` | `ZeroSession` assembled **and** it announced itself on `/ws/events` |
+| `EVENT STREAM` | `full` = open + announced · `partial` = open, silent · `offline` = closed |
+| `CODEX EXECUTOR` | `ZERO_RUNTIME_WS_URL`, shown only when one is configured |
+
+`READY` = gateway healthy + HWD-ZERO healthy + `ZeroSession` online +
+`/ws/events` connected. **Codex appears nowhere in that list**, so port 8787 is
+not required for READY and a phone that will never run codex reaches it.
+
+`FULL` means complete event coverage — missions, agents and approvals all
+arrive on one stream. It does not mean unrestricted shell, filesystem or
+credentials: every capability and approval gate is untouched, and critical
+actions still require a human.
+
+### Two agent populations, never conflated
+
+`AGENTS` counts **child agents discovered on disk** against the eight the
+policy allows, as `N/8 DISCOVERED` with the missing ones named. HWD-ZERO's
+role registry — `zero`, `codex`, `claude-code`, `perplexity`, `checkmate`,
+`pulse` — is a different population, and showing it here is what put
+"6 REGISTERED" next to a policy naming eight. Discovery runs in HWD-ZERO
+(`/api/agents/children`) because HWD-ZERO is the runtime; it used to run
+through the codex app-server, so with codex absent no child agent was ever
+found. The runtime reports facts; `src/zero/agentPolicy.ts` remains the single
+place that decides which repositories are allowed.
 
 ## What the HWD-ZERO analysis actually found
 

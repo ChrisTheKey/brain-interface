@@ -61,7 +61,8 @@ export function buildGraph(
     depth: 0,
     parentId: null,
     metadata: {},
-    description: 'Central orchestrator (ZERO app-server).',
+    // ZERO's runtime is HWD-ZERO's ZeroSession, not an app-server beside it.
+    description: 'Central orchestrator (HWD-ZERO · ZeroSession).',
   };
   nodes.push(zeroNode);
 
@@ -601,12 +602,29 @@ function threadStatus(status: ThreadStatus | undefined, isLoaded: boolean): Node
  * and the socket, neither of which is graph data), so it is applied here as a
  * last step rather than threaded backwards into the transform.
  */
-export function withZeroStatus(graph: GraphModel, status: NodeStatus): GraphModel {
+export function withZeroStatus(
+  graph: GraphModel,
+  status: NodeStatus,
+  detail?: { label?: string; description?: string },
+): GraphModel {
   let changed = false;
   const nodes = graph.nodes.map((node) => {
-    if (node.id !== ZERO_NODE_ID || node.status === status) return node;
+    if (node.id !== ZERO_NODE_ID) return node;
+    const next = {
+      ...node,
+      status,
+      ...(detail?.description ? { description: detail.description } : {}),
+    };
+    if (detail?.label !== undefined) next.metadata = { ...node.metadata, state: detail.label };
+    if (
+      node.status === next.status &&
+      node.description === next.description &&
+      node.metadata['state'] === next.metadata['state']
+    ) {
+      return node;
+    }
     changed = true;
-    return { ...node, status };
+    return next;
   });
   return changed ? { ...graph, nodes } : graph;
 }

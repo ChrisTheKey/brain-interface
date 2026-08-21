@@ -10,7 +10,8 @@ import { useZeroBrain } from './state/useZeroBrain';
 import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
 import { useOperator } from './state/useOperator';
 import { useZeroStatus } from './state/useZeroStatus';
-import { zeroNodeStatus } from './zero/connectionState';
+import { useChildAgents } from './state/useChildAgents';
+import { zeroNodeDescription, zeroNodeLabel, zeroNodeStatus } from './zero/connectionState';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
 import type { GraphNode } from './graph/model';
@@ -33,21 +34,33 @@ export default function App(): React.JSX.Element {
   // READY needs HTTP health *and* an open same-origin socket *and* a real
   // answer from the backend — a rendered bundle proves none of the three.
   const status = useZeroStatus({
-    runtimeSocket: brain.connection,
+    // The canonical runtime is HWD-ZERO's ZeroSession, reached over
+    // /ws/events. `brain.connection` is the optional codex executor's socket
+    // and never gates anything.
+    codexSocket: brain.connection,
     eventStream: operator.connection,
+    runtimeAnnounced: operator.runtimeAnnounced,
     runtimeResponded: brain.runtimeResponded,
     operatorResponded: operator.responded,
     safeMode: operator.safeMode,
     error: brain.connectionError ?? operator.error,
   });
 
+  // Child agents come from the runtime once it is healthy — never from the
+  // brain's role registry, which is a different population entirely.
+  const childAgents = useChildAgents(operatorClient, status.health?.zero === 'healthy');
+
   const showDiagnostics = import.meta.env.DEV;
 
   // The ZERO node shows the *connection*, not "did a snapshot arrive". Offline
   // must look offline instead of looking like an empty graph.
   const graph = useMemo(
-    () => withZeroStatus(brain.graph, zeroNodeStatus(status.state)),
-    [brain.graph, status.state],
+    () =>
+      withZeroStatus(brain.graph, zeroNodeStatus(status.state), {
+        label: zeroNodeLabel(status.runtime, status.state),
+        description: zeroNodeDescription(status.runtime),
+      }),
+    [brain.graph, status.state, status.runtime],
   );
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -141,11 +154,19 @@ export default function App(): React.JSX.Element {
       />
       <ZeroPanel
         status={status}
-        registeredAgents={operator.registry?.agents.length ?? null}
-        runtimeAgents={brain.snapshot?.agents.length ?? null}
+        childAgents={
+          childAgents.loaded
+            ? {
+                discovered: childAgents.discovered,
+                allowed: childAgents.allowed,
+                missing: childAgents.missing,
+              }
+            : null
+        }
         voiceState={brain.voiceState}
         onRetry={() => {
           status.retry();
+          childAgents.refresh();
           brain.refresh();
           void operator.refresh();
         }}

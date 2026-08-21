@@ -16,6 +16,7 @@ import { Backoff } from '../zero/lifecycle';
 import { ZERO_EVENTS_WS_PATH, apiPath, sameOriginWsUrl } from '../zero/endpoints';
 import type {
   ApprovalTicket,
+  ChildAgentDiscovery,
   GatewayHealth,
   OperatorApproval,
   OperatorEvent,
@@ -130,8 +131,19 @@ export class HwdZeroClient {
     return this.get('/api/state');
   }
 
+  /** ZERO's own roles and executors. Not the child-agent network. */
   registry(): Promise<OperatorRegistry> {
     return this.get('/api/agents');
+  }
+
+  /**
+   * Child-agent repositories the runtime found on disk.
+   *
+   * Facts, not policy: which of these may become agents is decided by
+   * `src/zero/agentPolicy.ts`, which stays the single source of that list.
+   */
+  childAgents(): Promise<ChildAgentDiscovery> {
+    return this.get('/api/agents/children');
   }
 
   async tasks(): Promise<OperatorTask[]> {

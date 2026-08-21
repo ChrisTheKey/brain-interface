@@ -10,8 +10,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ZERO_HEALTH_PATH } from '../zero/endpoints';
 import { onNetworkWake } from '../zero/lifecycle';
 import {
+  codexExecutorLevel,
+  eventStreamLevel,
   resolveZeroStatus,
+  runtimeLevel,
+  ZERO_STATUS_DEFAULTS,
+  type EventStreamLevel,
+  type ExecutorLevel,
   type ProbeResult,
+  type RuntimeLevel,
   type SocketState,
   type StreamState,
   type ZeroStatus,
@@ -23,8 +30,12 @@ const HEALTH_INTERVAL_UNHEALTHY_MS = 5_000;
 const HEALTH_INTERVAL_HEALTHY_MS = 20_000;
 
 export interface ZeroStatusSources {
-  runtimeSocket: SocketState;
+  /** The optional codex executor's socket. Never a gate on READY. */
+  codexSocket: SocketState;
+  /** HWD-ZERO's own event stream — the one that matters. */
   eventStream: StreamState;
+  /** Did `zero.runtime.ready` arrive on that stream? */
+  runtimeAnnounced: boolean;
   runtimeResponded: boolean;
   operatorResponded: boolean;
   safeMode: boolean;
@@ -35,6 +46,12 @@ export interface ZeroStatusSources {
 export interface ZeroStatusView extends ZeroStatus {
   /** The gateway's last health payload, or null before the first answer. */
   health: GatewayHealth | null;
+  /** How complete ZERO's event stream is: offline, partial or full. */
+  eventStream: EventStreamLevel;
+  /** The canonical runtime — HWD-ZERO's ZeroSession. */
+  runtime: RuntimeLevel;
+  /** The optional codex executor, reported but never required. */
+  codexExecutor: ExecutorLevel;
   /** Re-probe now (the Retry button, and every browser wake-up). */
   retry: () => void;
 }
@@ -108,29 +125,34 @@ export function useZeroStatus(sources: ZeroStatusSources): ZeroStatusView {
   // once rather than waiting out the poll interval.
   useEffect(() => onNetworkWake(retry), [retry]);
 
-  const status = useMemo(
-    () =>
-      resolveZeroStatus({
-        probed,
-        gateway,
-        authRequired: health?.authRequired ?? false,
-        zeroHttp: health ? (health.zero === 'healthy' ? 'healthy' : 'offline') : 'unknown',
-        runtimeSocket: sources.runtimeSocket,
-        // The gateway is the only thing that knows whether a runtime
-        // app-server exists at all; the browser must not assume one.
-        runtimeConfigured: health?.runtimeConfigured ?? false,
-        eventStream: sources.eventStream,
-        runtimeResponded: sources.runtimeResponded,
-        operatorResponded: sources.operatorResponded,
-        safeMode: sources.safeMode,
-        error: sources.error || probeError,
-      }),
+  const input = useMemo(
+    () => ({
+      probed,
+      gateway,
+      authRequired: health?.authRequired ?? false,
+      zeroHttp: (health
+        ? health.zero === 'healthy'
+          ? 'healthy'
+          : 'offline'
+        : 'unknown') as ProbeResult,
+      codexSocket: sources.codexSocket,
+      // The gateway is the only thing that knows whether a codex executor
+      // exists at all; the browser must not assume one.
+      codexConfigured: health?.runtimeConfigured ?? false,
+      runtimeAnnounced: sources.runtimeAnnounced,
+      eventStream: sources.eventStream,
+      runtimeResponded: sources.runtimeResponded,
+      operatorResponded: sources.operatorResponded,
+      safeMode: sources.safeMode,
+      error: sources.error || probeError,
+    }),
     [
       probed,
       gateway,
       health,
       probeError,
-      sources.runtimeSocket,
+      sources.codexSocket,
+      sources.runtimeAnnounced,
       sources.eventStream,
       sources.runtimeResponded,
       sources.operatorResponded,
@@ -139,5 +161,14 @@ export function useZeroStatus(sources: ZeroStatusSources): ZeroStatusView {
     ],
   );
 
-  return { ...status, health, retry };
+  const status = useMemo(() => resolveZeroStatus(input), [input]);
+
+  return {
+    ...status,
+    health,
+    retry,
+    eventStream: eventStreamLevel({ ...ZERO_STATUS_DEFAULTS, ...input }),
+    runtime: runtimeLevel({ ...ZERO_STATUS_DEFAULTS, ...input }),
+    codexExecutor: codexExecutorLevel({ ...ZERO_STATUS_DEFAULTS, ...input }),
+  };
 }
