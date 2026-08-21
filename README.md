@@ -72,15 +72,31 @@ rather than discovered.
 
 ```bash
 pkg install git
+
+# HWD-ZERO is private, so store a GitHub token once (scope: repo).
+# Skip this only if you have made the operator repository public.
+git config --global credential.helper store
+
 mkdir -p ~/ZERO-WORKSPACE && cd ~/ZERO-WORKSPACE
-git clone -b claude/zero-autonomous-business-system-0d7eku https://github.com/ChrisTheKey/HWD-ZERO.git
-git clone -b claude/zero-autonomous-business-system-0d7eku https://github.com/ChrisTheKey/brain-interface.git
+git clone -b claude/zero-autonomous-business-system-0d7eku \
+  https://github.com/ChrisTheKey/brain-interface.git
 cd brain-interface
+
+bash scripts/clone-workspace.sh    # asks for the token on the first private repo
 bash scripts/setup-termux.sh
 bash scripts/start-zero-termux.sh
 ```
 
 Then open the URL it prints, on the phone itself.
+
+**On the private repositories.** An unauthenticated `git clone` of a private
+repo answers `403` with the message *"Write access to repository not granted"* —
+a permission it was not asking for, which makes the real cause easy to miss. It
+means: not logged in. `clone-workspace.sh` says so in those words and prints the
+token steps. Paste the **token** as the password, not your account password.
+
+`~/.git-credentials` then holds that token in clear text. It *is* the
+credential — revoke it if you lose the phone.
 
 | Works | Does not |
 | --- | --- |

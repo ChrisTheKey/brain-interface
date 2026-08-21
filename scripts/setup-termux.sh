@@ -30,10 +30,11 @@ echo "  python: $($ZERO_PYTHON --version 2>/dev/null || echo MISSING)"
 echo
 echo "[2/5] HWD-ZERO"
 if [ ! -f "$ZERO_BRAIN_ROOT/agents/child-agents.yaml" ]; then
-  echo "  not found at $ZERO_BRAIN_ROOT" >&2
-  echo "  clone it beside this repository:" >&2
-  echo "    cd $ZERO_WORKSPACE && git clone -b $(git -C "$ZERO_ROOT" rev-parse --abbrev-ref HEAD) \\" >&2
-  echo "      https://github.com/ChrisTheKey/HWD-ZERO.git" >&2
+  echo "  not present — cloning the workspace"
+  bash "$ZERO_ROOT/scripts/clone-workspace.sh" || exit 1
+fi
+if [ ! -f "$ZERO_BRAIN_ROOT/agents/child-agents.yaml" ]; then
+  echo "  still not at $ZERO_BRAIN_ROOT — cannot continue without the operator" >&2
   exit 1
 fi
 # The operator's only runtime dependency is PyYAML — deliberately, and it is
