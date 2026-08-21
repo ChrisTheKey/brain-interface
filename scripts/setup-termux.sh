@@ -7,6 +7,10 @@
 # work on a phone. It does not pretend the phone is a laptop.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib-zero.sh"
+# lib-zero.sh turns on `set -e`. This script decides for itself what a failure
+# means — a private agent repository that will not clone is reported and skipped,
+# not fatal — so exit-on-error goes back off here.
+set +e
 
 if ! zero_is_termux; then
   echo "This script is for Termux on Android. On a laptop run scripts/setup-zero.sh." >&2

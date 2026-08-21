@@ -9,6 +9,10 @@
 # failure is so easy to misread. This script names the real cause and the fix.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib-zero.sh"
+# lib-zero.sh turns on `set -e`. This script decides for itself what a failure
+# means — a private agent repository that will not clone is reported and skipped,
+# not fatal — so exit-on-error goes back off here.
+set +e
 
 BRANCH="${ZERO_BRANCH:-$(git -C "$ZERO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
 OWNER="${ZERO_GITHUB_OWNER:-ChrisTheKey}"

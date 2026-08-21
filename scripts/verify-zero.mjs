@@ -72,7 +72,16 @@ const agents = await get('/api/agents');
 const names = agents.agents.map(a=>a.repo.toLowerCase());
 for (const bad of ['website-building','loop-engeneering','loop-engeniering','prompt-optimizer','more-available-tokens'])
   check(!names.includes(bad), `${bad} is not registered`);
-check(agents.excluded.length>0, 'excluded repositories present on disk are reported as excluded');
+// Two separate facts. The standing policy is the same on every machine and must
+// always be visible; what was actually refused depends on what is in this
+// workspace, so an empty list is the correct answer when none of them is here.
+// An earlier version asserted the second unconditionally and failed on a clean
+// workspace — it was testing the environment, not the rule.
+const liveStatus = await get('/api/status');
+const exclusionPolicy = liveStatus.exclusion_policy ?? [];
+for (const bad of ['Website-Building','Loop-Engeneering','Prompt-Optimizer','more-available-tokens'])
+  check(exclusionPolicy.includes(bad), `exclusion policy carries ${bad}`);
+console.log(`  note  ${agents.excluded.length} of them present in this workspace and refused`);
 
 console.log('\n=== KILL SWITCH ===');
 await post('/api/system/stop',{reason:'e2e'});

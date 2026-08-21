@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Shared helpers for the ZERO scripts. Detects the host, never assumes it.
+#
+# NOTE: sourcing this enables `set -e` in the caller. That suits the simple
+# launchers, and is wrong for any script that inspects a failure and continues —
+# a private agent repository failing to clone must not end the run. Those
+# scripts turn it back off right after sourcing, and say so where they do.
 set -euo pipefail
 
 ZERO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
