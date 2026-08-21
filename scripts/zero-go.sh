@@ -105,7 +105,12 @@ AGENTS=(
   SEO Funnel
 )
 
+SCRIPT_VERSION="$(git -C "$ZERO_ROOT" log -1 --format='%h %cd' --date=short -- scripts/zero-go.sh 2>/dev/null)"
+
 echo "ZERO — ONE-SHOT START"
+# Printed because the first question about any failure report is which version
+# produced it, and "run git pull" is otherwise unfalsifiable advice.
+echo "  script:    ${SCRIPT_VERSION:-unknown (not a git checkout)}"
 echo "  workspace: $ZERO_WORKSPACE"
 echo "  branch:    $BRANCH"
 echo "  token:     $([ -n "$TOKEN" ] && echo "supplied" || echo "will ask if needed")"
@@ -194,6 +199,17 @@ fi
 clone_missing HWD-ZERO required || exit 1
 for name in "${AGENTS[@]}"; do clone_missing "$name" optional; done
 
+# The clone step above already refuses to continue without the operator. This
+# says so again in one line, because the failure that prompted it was a run that
+# reached [4/4] before noticing — by which point it had installed, built, and
+# taken a wake lock for a ZERO that was never going to start.
+if [ ! -f "$ZERO_BRAIN_ROOT/agents/child-agents.yaml" ]; then
+  echo >&2
+  echo "STOPPING: the operator is not at $ZERO_BRAIN_ROOT" >&2
+  echo "  Nothing after this step can work without it." >&2
+  exit 1
+fi
+
 # ------------------------------------------------------------------ operator
 echo
 echo "[2/4] operator"
@@ -236,6 +252,9 @@ if zero_port_busy "$ZERO_UI_PORT"; then
   sleep 1
 fi
 
+# Android keeps the lock until something releases it, so a run that dies between
+# taking it and finishing would drain the battery for a ZERO that is not there.
+trap 'zero_wake_unlock' EXIT INT TERM
 zero_wake_lock
 zero_start_api || exit 1
 
@@ -272,7 +291,6 @@ if zero_http_ok "http://127.0.0.1:$ZERO_UI_PORT/api/gateway/health"; then
   echo "======================================================"
 else
   echo "The gateway did not answer. Log: $ZERO_PID_DIR/hwd-zero.log" >&2
-  zero_wake_unlock
   exit 1
 fi
 wait
