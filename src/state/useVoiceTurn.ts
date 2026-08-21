@@ -37,8 +37,13 @@ export type VoiceErrorCode =
   | 'insecure_context'
   | 'stt_model_missing'
   | 'stt_binary_missing'
+  | 'stt_binary_unusable'
+  | 'stt_timeout'
+  | 'stt_failed'
   | 'stt_offline'
+  | 'empty_transcript'
   | 'voice_socket_disconnected'
+  | 'backend_restarted'
   | 'audio_format_error'
   | 'tts_offline'
   | 'zero_refused';
@@ -90,14 +95,42 @@ const REMEDIES: Record<VoiceErrorCode, string> = {
   mic_unavailable: 'No microphone was found on this device.',
   insecure_context:
     'Browsers only allow the microphone over https, or on the device itself. Type instead, or serve the gateway behind TLS.',
-  stt_model_missing: 'No speech model is installed. See VOICE diagnostics for the command.',
-  stt_binary_missing: 'whisper.cpp is not installed on the ZERO host.',
+  stt_model_missing: 'No speech model is installed. Run scripts/zero-doctor.sh for the command.',
+  stt_binary_missing: 'whisper.cpp is not installed on the ZERO host. Run scripts/zero-termux-one-shot.sh.',
+  stt_binary_unusable:
+    'whisper.cpp is present but will not run on this device. Rebuild it, or set ZERO_WHISPER_BIN.',
+  stt_timeout: 'Speech recognition did not finish in time. A shorter utterance usually works.',
+  stt_failed: 'The speech engine exited with an error. See .zero/logs/voice.log.',
   stt_offline: 'ZERO could not run speech recognition.',
+  empty_transcript: 'Nothing was understood. Press speak and say it again.',
   voice_socket_disconnected: 'The voice connection dropped. Press speak to try again.',
+  backend_restarted: 'The ZERO runtime restarted mid-turn. Nothing was executed. Press speak to try again.',
   audio_format_error: 'The captured audio could not be converted.',
   tts_offline: 'ZERO could not speak the answer. The text is above.',
   zero_refused: 'ZERO declined the request.',
 };
+
+const SERVER_CODES = new Set<string>([
+  'stt_model_missing',
+  'stt_binary_missing',
+  'stt_binary_unusable',
+  'stt_timeout',
+  'stt_failed',
+  'stt_offline',
+  'empty_transcript',
+  'voice_socket_disconnected',
+  'backend_restarted',
+]);
+
+/**
+ * The server's reason, as a code this interface has a remedy for.
+ *
+ * One place rather than three nested ternaries: every reason the runtime can
+ * report has to land somewhere better than "voice failed".
+ */
+export function voiceErrorCodeFor(reason: string): VoiceErrorCode {
+  return SERVER_CODES.has(reason) ? (reason as VoiceErrorCode) : 'stt_offline';
+}
 
 function describe(code: VoiceErrorCode, message: string): VoiceTurnError {
   return { code, message, remedy: REMEDIES[code] };
@@ -228,13 +261,7 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
       {
         onReady: (readiness: VoiceReadiness) => {
           if (readiness.voice === 'ready') return;
-          const reason = readiness.stt?.reason ?? 'stt_offline';
-          const code: VoiceErrorCode =
-            reason === 'stt_model_missing'
-              ? 'stt_model_missing'
-              : reason === 'stt_binary_missing'
-                ? 'stt_binary_missing'
-                : 'stt_offline';
+          const code = voiceErrorCodeFor(readiness.stt?.reason ?? 'stt_offline');
           // Told before a word is spoken, rather than after a turn that could
           // never have worked.
           setError({
@@ -257,18 +284,21 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
           setState('transcribing');
           void deliver(text, 'voice', confidence);
         },
-        onError: (reason, detail) => {
-          const code: VoiceErrorCode =
-            reason === 'stt_model_missing'
-              ? 'stt_model_missing'
-              : reason === 'stt_binary_missing'
-                ? 'stt_binary_missing'
-                : reason === 'voice_socket_disconnected'
-                  ? 'voice_socket_disconnected'
-                  : 'stt_offline';
+        onError: (reason, detail, speak) => {
+          closeMicrophone();
+          const code = voiceErrorCodeFor(reason);
+          if (code === 'empty_transcript') {
+            // Heard sound, understood no words. That is a sentence to read
+            // back, not a failure banner — and nothing was executed.
+            setPartial('');
+            setFinalTranscript('');
+            setAnswer(speak || 'Ich habe dich nicht verstanden.');
+            setError(null);
+            setState('idle');
+            return;
+          }
           setError(describe(code, detail || reason));
           setState('error');
-          closeMicrophone();
         },
       },
       { language: options.language },

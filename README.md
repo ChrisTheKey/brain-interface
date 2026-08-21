@@ -205,7 +205,10 @@ The gateway is the single origin — port 3000 serves the interface, `/api` and
 `/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
 
 ```bash
-# Android / Termux — one command, and the interface stays up regardless
+# Android / Termux — from a fresh install to a speaking runtime, one command
+bash scripts/zero-termux-one-shot.sh           # packages, whisper, model, start
+bash scripts/zero-doctor.sh                    # PASS / WARN / FAIL, with remedies
+
 bash scripts/start-zero-termux.sh              # foreground
 bash scripts/start-zero-termux.sh --background # detached, survives the session
 bash scripts/start-zero-termux.sh --lan        # also reachable from the LAN
@@ -237,7 +240,13 @@ the log path rather than claiming success.
 .zero/run/gateway.pid      .zero/logs/gateway.log
 .zero/run/hwd-zero.pid     .zero/logs/hwd-zero.log
 .zero/run/supervisor.pid   .zero/logs/supervisor.log
+                           .zero/logs/voice.log
 ```
+
+`voice.log` records what each spoken turn did — session, chunk and byte counts,
+when finalizing started, the engine's exit, whether a transcript was produced
+and where the command went. It records no words and no audio: a voice log that
+holds what was said is a recording.
 
 `--background` starts three things: the gateway on 3000, HWD-ZERO on loopback
 via `python -m zero.server`, and a small supervisor that restarts HWD-ZERO if
@@ -245,7 +254,10 @@ it dies. The gateway is deliberately *not* supervised — it survives an absent
 backend by design, and a second process able to restart it would be a second
 process able to take port 3000 away. The supervisor exits when the gateway
 does, and gives up after five failed restarts in five minutes rather than
-hammering a broken install (`--no-supervise` turns it off).
+hammering a broken install (`--no-supervise` turns it off). Restarts back off
+— 1s, 2s, 5s, 10s, then 15s — and before starting anything it asks port 8000
+who is there: an HWD-ZERO already answering is adopted, never duplicated.
+Starting a second one is what produced `[Errno 98] Address already in use`.
 
 Stopping goes through those pid files only — never `pkill node` or
 `killall python`, which on a phone take out whatever else is running.

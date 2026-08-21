@@ -199,6 +199,10 @@ describe('scripts/zero-supervise.sh', () => {
     startSupervisor(dir, port, {
       ZERO_SUPERVISE_CMD: 'exit 1',
       ZERO_SUPERVISE_MAX_RESTARTS: '2',
+      // Real values are 20 s of grace plus a growing backoff, which is right
+      // for a phone and far too slow to assert against.
+      ZERO_SUPERVISE_GRACE: '1',
+      ZERO_SUPERVISE_BACKOFF: '1 1',
     });
 
     const log = join(logDir, 'supervisor.log');
@@ -212,6 +216,72 @@ describe('scripts/zero-supervise.sh', () => {
     // It said where to look instead of failing silently.
     expect(contents).toContain('BACKEND OFFLINE');
     expect(contents.match(/restart \d+\/2/g)?.length).toBe(2);
+  }, TIMEOUT);
+
+  it('backs off instead of hammering, and the backoff stays bounded', async () => {
+    // 1s, 2s, then 5s: a broken install is not made better by retrying it
+    // sixty times a minute, and on a phone the retries cost battery.
+    const port = freePort();
+    const { dir, logDir } = makeWorkspace(port);
+    startSupervisor(dir, port, {
+      ZERO_SUPERVISE_CMD: 'exit 1',
+      ZERO_SUPERVISE_MAX_RESTARTS: '4',
+      ZERO_SUPERVISE_GRACE: '0',
+      ZERO_SUPERVISE_BACKOFF: '1 2 3 3',
+    });
+
+    const log = join(logDir, 'supervisor.log');
+    await waitFor(
+      () => existsSync(log) && (readFileSync(log, 'utf8').match(/restart \d+\/4/g)?.length ?? 0) >= 4,
+      60_000,
+    );
+    const contents = readFileSync(log, 'utf8');
+    const waits = [...contents.matchAll(/next check in (\d+)s/g)].map((match) =>
+      Number(match[1]),
+    );
+    expect(waits.slice(0, 3)).toEqual([1, 2, 3]);
+    // The last step repeats rather than growing without limit.
+    expect(Math.max(...waits)).toBe(3);
+  }, TIMEOUT);
+
+  it('adopts an HWD-ZERO already on the port rather than starting a second', async () => {
+    // Starting a second server against a bound port is what produced
+    // `[Errno 98] Address already in use` on the phone. Identity — the health
+    // payload saying HWD-ZERO and naming its pid — is how the two are told
+    // apart from a stranger holding the same port.
+    const port = freePort();
+    const { dir, pidDir, logDir } = makeWorkspace(port);
+    const impostorFile = join(dir, 'already-running.cjs');
+    writeFileSync(
+      impostorFile,
+      [
+        'const http = require("http");',
+        'http.createServer((_q, r) => {',
+        '  r.writeHead(200, { "content-type": "application/json" });',
+        '  r.end(JSON.stringify({ status: "ok", service: "HWD-ZERO", pid: process.pid }));',
+        `}).listen(${port}, "127.0.0.1");`,
+      ].join('\n'),
+    );
+    const existing = spawn(process.execPath, [impostorFile], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    cleanups.push(() => {
+      try {
+        process.kill(existing.pid!, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    });
+    expect(await waitFor(() => answers(port))).toBe(true);
+
+    startSupervisor(dir, port, { ZERO_SUPERVISE_GRACE: '0' });
+    const log = join(logDir, 'supervisor.log');
+    expect(
+      await waitFor(() => existsSync(log) && readFileSync(log, 'utf8').includes('adopted'), 30_000),
+    ).toBe(true);
+    // The pid file names the server that is actually serving.
+    expect(Number(readFileSync(join(pidDir, 'hwd-zero.pid'), 'utf8').trim())).toBe(existing.pid);
   }, TIMEOUT);
 
   it('exits when the gateway is gone, leaving no orphan loop', async () => {

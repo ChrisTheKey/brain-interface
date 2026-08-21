@@ -7,7 +7,7 @@ import {
   toPcm16,
 } from '../src/voice/microphone';
 import { VoiceTransport } from '../src/voice/transport';
-import { visualStateFor } from '../src/state/useVoiceTurn';
+import { visualStateFor, voiceErrorCodeFor } from '../src/state/useVoiceTurn';
 import { ZERO_VOICE_WS_PATH, zeroVoiceWsUrl } from '../src/zero/endpoints';
 
 /**
@@ -115,24 +115,50 @@ class FakeSocket {
   }
 }
 
+/** A controllable clock, so a timeout test does not have to wait one out. */
+class FakeTimers {
+  private next = 1;
+  readonly pending = new Map<number, () => void>();
+
+  setTimeout = (handler: () => void): number => {
+    const handle = this.next++;
+    this.pending.set(handle, handler);
+    return handle;
+  };
+
+  clearTimeout = (handle: number): void => {
+    this.pending.delete(handle);
+  };
+
+  /** Fire everything currently scheduled. */
+  runAll(): void {
+    for (const [handle, handler] of [...this.pending]) {
+      this.pending.delete(handle);
+      handler();
+    }
+  }
+}
+
 function makeTransport() {
   const partials: string[] = [];
   const finals: { text: string; confidence: number | null }[] = [];
-  const errors: { reason: string; detail: string }[] = [];
+  const errors: { reason: string; detail: string; speak?: string }[] = [];
   const ready: unknown[] = [];
+  const timers = new FakeTimers();
   const transport = new VoiceTransport(
     {
       onReady: (readiness) => ready.push(readiness),
       onPartial: (text) => partials.push(text),
       onFinal: (text, confidence) => finals.push({ text, confidence }),
-      onError: (reason, detail) => errors.push({ reason, detail }),
+      onError: (reason, detail, speak) => errors.push({ reason, detail, speak }),
     },
     {
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
       urlFor: ({ session }) => `ws://origin.test/ws/voice?session=${session}`,
+      timers,
     },
   );
-  return { transport, partials, finals, errors, ready };
+  return { transport, partials, finals, errors, ready, timers };
 }
 
 describe('voice transport', () => {
@@ -191,7 +217,7 @@ describe('voice transport', () => {
       detail: 'no model installed',
     });
     expect(finals).toEqual([]);
-    expect(errors[0]).toEqual({ reason: 'stt_model_missing', detail: 'no model installed' });
+    expect(errors[0]).toMatchObject({ reason: 'stt_model_missing', detail: 'no model installed' });
   });
 
   it('drops a frame it cannot parse rather than rendering it', () => {
@@ -231,6 +257,104 @@ describe('voice transport', () => {
     second.transport.cancel();
     expect(JSON.parse(other.sent.at(-1) as string)).toEqual({ type: 'cancel' });
     expect(other.closed).toBe(true);
+  });
+});
+
+describe('finalizing always ends', () => {
+  it('gives up rather than waiting forever for a transcript', () => {
+    // The failure the operator saw on the phone: LISTENING → FINALIZING →
+    // nothing at all. A turn that cannot finish must still finish.
+    const { transport, errors, timers } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    transport.stop();
+    expect(errors).toEqual([]);
+    timers.runAll();
+    expect(errors[0]!.reason).toBe('stt_timeout');
+  });
+
+  it('cancels the deadline once the transcript arrives', () => {
+    const { transport, finals, errors, timers } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    transport.stop();
+    FakeSocket.last!.deliver('voice.transcript.final', { ok: true, text: 'ZERO, status' });
+    timers.runAll();
+    expect(finals).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  it('reports a socket that dies mid-turn as a restart, not as silence', () => {
+    const { transport, errors } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    FakeSocket.last!.onclose?.();
+    // Nothing was executed — but the operator has to be told the turn is over.
+    expect(errors[0]!.reason).toBe('backend_restarted');
+  });
+
+  it('reports a socket that closes after stop as a dropped connection', () => {
+    const { transport, errors } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    transport.stop();
+    FakeSocket.last!.onclose?.();
+    expect(errors[0]!.reason).toBe('voice_socket_disconnected');
+  });
+
+  it('reports exactly one terminal outcome per turn', () => {
+    const { transport, errors, timers } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    transport.stop();
+    FakeSocket.last!.onerror?.();
+    FakeSocket.last!.onclose?.();
+    timers.runAll();
+    expect(errors).toHaveLength(1);
+  });
+
+  it('carries what ZERO should say about an empty transcript', () => {
+    const { transport, finals, errors } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    FakeSocket.last!.deliver('voice.transcript.final', {
+      ok: false,
+      reason: 'empty_transcript',
+      detail: 'the engine returned no words',
+      speak: 'Ich habe dich nicht verstanden.',
+    });
+    // Heard sound, understood no words: a sentence to read back, not a command.
+    expect(finals).toEqual([]);
+    expect(errors[0]!.speak).toBe('Ich habe dich nicht verstanden.');
+  });
+
+  it('cancelling is terminal too — no late timeout after an interrupt', () => {
+    const { transport, errors, timers } = makeTransport();
+    transport.open();
+    FakeSocket.last!.onopen?.();
+    transport.stop();
+    transport.cancel();
+    timers.runAll();
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('every runtime reason has a remedy', () => {
+  it('maps the reasons the runtime can actually report', () => {
+    for (const reason of [
+      'stt_binary_missing',
+      'stt_binary_unusable',
+      'stt_model_missing',
+      'stt_timeout',
+      'stt_failed',
+      'empty_transcript',
+      'voice_socket_disconnected',
+      'backend_restarted',
+    ]) {
+      expect(voiceErrorCodeFor(reason)).toBe(reason);
+    }
+    // Anything unknown still lands somewhere better than a blank screen.
+    expect(voiceErrorCodeFor('something_new')).toBe('stt_offline');
   });
 });
 

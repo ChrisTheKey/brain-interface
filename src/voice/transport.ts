@@ -30,7 +30,11 @@ export interface VoiceTransportHandlers {
   /** The transcript ZERO may act on. Arrives exactly once. */
   onFinal: (text: string, confidence: number | null) => void;
   onState?: (state: VoiceSocketState) => void;
-  onError?: (reason: string, detail: string) => void;
+  /**
+   * A specific failure. `speak` carries what ZERO would say about it — an
+   * empty transcript is a sentence to read out, not a red banner.
+   */
+  onError?: (reason: string, detail: string, speak?: string) => void;
 }
 
 export interface VoiceTransportOptions {
@@ -39,7 +43,23 @@ export interface VoiceTransportOptions {
   socketFactory?: (url: string) => WebSocket;
   /** Injected for tests; defaults to `zeroVoiceWsUrl`. */
   urlFor?: (query: { session: string; language?: string }) => string;
+  /**
+   * How long to wait for a final transcript after `stop`.
+   *
+   * The server has its own deadline and normally answers first; this is the
+   * backstop for the case where it cannot answer at all — a killed backend, a
+   * proxy that dropped the socket. FINALIZING must always end.
+   */
+  finalizeTimeoutMs?: number;
+  /** Injected in tests. */
+  timers?: {
+    setTimeout: (handler: () => void, ms: number) => number;
+    clearTimeout: (handle: number) => void;
+  };
 }
+
+/** The client-side backstop, deliberately longer than the server's own. */
+export const FINALIZE_TIMEOUT_MS = 60_000;
 
 let sessionCounter = 0;
 
@@ -53,12 +73,39 @@ export class VoiceTransport {
   private socket: WebSocket | null = null;
   private state: VoiceSocketState = 'closed';
   private finalSeen = false;
+  private stopRequested = false;
+  private finalizeTimer: number | null = null;
   readonly sessionId = nextSessionId();
 
   constructor(
     private readonly handlers: VoiceTransportHandlers,
     private readonly options: VoiceTransportOptions = {},
   ) {}
+
+  private get timers() {
+    return (
+      this.options.timers ?? {
+        setTimeout: (handler: () => void, ms: number) =>
+          window.setTimeout(handler, ms) as unknown as number,
+        clearTimeout: (handle: number) => window.clearTimeout(handle),
+      }
+    );
+  }
+
+  /** One terminal outcome per turn, whichever arrives first. */
+  private settle(reason: string, detail: string, speak?: string): void {
+    if (this.finalSeen) return;
+    this.finalSeen = true;
+    this.clearFinalizeTimer();
+    this.handlers.onError?.(reason, detail, speak);
+  }
+
+  private clearFinalizeTimer(): void {
+    if (this.finalizeTimer !== null) {
+      this.timers.clearTimeout(this.finalizeTimer);
+      this.finalizeTimer = null;
+    }
+  }
 
   get socketState(): VoiceSocketState {
     return this.state;
@@ -88,10 +135,22 @@ export class VoiceTransport {
 
     socket.onopen = () => this.setState('open');
     socket.onerror = () =>
-      this.handlers.onError?.('voice_socket_disconnected', 'the voice socket errored');
+      this.settle('voice_socket_disconnected', 'the voice socket errored');
     socket.onclose = () => {
+      const wasOpen = this.state === 'open';
       this.socket = null;
       this.setState('closed');
+      if (this.finalSeen) return;
+      // A socket that closes without a transcript is still a terminal
+      // outcome. Left unreported, the turn sits in FINALIZING forever.
+      this.settle(
+        this.stopRequested ? 'voice_socket_disconnected' : 'backend_restarted',
+        this.stopRequested
+          ? 'the voice socket closed before the transcript arrived'
+          : wasOpen
+            ? 'the ZERO runtime closed the voice socket'
+            : 'the voice socket never opened',
+      );
     };
     socket.onmessage = (event: MessageEvent) => {
       if (typeof event.data !== 'string') return;
@@ -111,9 +170,10 @@ export class VoiceTransport {
           return;
         case 'voice.transcript.final': {
           if (payload['ok'] === false) {
-            this.handlers.onError?.(
+            this.settle(
               String(payload['reason'] ?? 'stt_offline'),
               String(payload['detail'] ?? ''),
+              typeof payload['speak'] === 'string' ? payload['speak'] : undefined,
             );
             return;
           }
@@ -121,6 +181,7 @@ export class VoiceTransport {
           // command twice.
           if (this.finalSeen) return;
           this.finalSeen = true;
+          this.clearFinalizeTimer();
           this.handlers.onFinal(
             String(payload['text'] ?? ''),
             typeof payload['confidence'] === 'number' ? payload['confidence'] : null,
@@ -149,16 +210,31 @@ export class VoiceTransport {
 
   /** End the utterance and ask for the final transcript. */
   stop(): void {
-    if (!this.socket) return;
+    if (!this.socket) {
+      this.settle('voice_socket_disconnected', 'the voice socket was already closed');
+      return;
+    }
+    this.stopRequested = true;
     try {
       this.socket.send(JSON.stringify({ type: 'stop' }));
     } catch {
       this.close();
+      return;
     }
+    const limit = this.options.finalizeTimeoutMs ?? FINALIZE_TIMEOUT_MS;
+    this.clearFinalizeTimer();
+    this.finalizeTimer = this.timers.setTimeout(() => {
+      this.finalizeTimer = null;
+      this.settle('stt_timeout', `no transcript arrived within ${Math.round(limit / 1000)}s`);
+      this.close();
+    }, limit);
   }
 
   /** Abandon the turn without finalizing — the interrupt path. */
   cancel(): void {
+    // A deliberate abandon is terminal too: no timeout, no late error.
+    this.finalSeen = true;
+    this.clearFinalizeTimer();
     if (this.socket) {
       try {
         this.socket.send(JSON.stringify({ type: 'cancel' }));
@@ -170,6 +246,7 @@ export class VoiceTransport {
   }
 
   close(): void {
+    this.clearFinalizeTimer();
     const socket = this.socket;
     this.socket = null;
     try {

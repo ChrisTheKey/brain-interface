@@ -57,6 +57,8 @@ ZERO_PID_FILE="$ZERO_PID_DIR/hwd-zero.pid"
 SUPERVISOR_PID_FILE="$ZERO_PID_DIR/supervisor.pid"
 GATEWAY_LOG="$ZERO_LOG_DIR/gateway.log"
 ZERO_LOG="$ZERO_LOG_DIR/hwd-zero.log"
+VOICE_LOG="$ZERO_LOG_DIR/voice.log"
+ZERO_API_PORT="$(zero_url_port "$ZERO_API_URL" 2>/dev/null || echo 8000)"
 WAKELOCK_FILE="$ZERO_PID_DIR/wakelock"
 
 ok()   { printf '  [ok]   %s\n' "$1"; }
@@ -267,9 +269,18 @@ step "6 · HWD-ZERO"
 BACKEND_EXPECTED=false
 if [ "$NO_BACKEND" = true ]; then
   warn "skipped (--no-backend); the interface will report BACKEND OFFLINE"
-elif zero_http_ok "$ZERO_API_URL/api/health"; then
-  ok "already running at $ZERO_API_URL"
+elif RUNNING_PID="$(zero_zero_on_port "$ZERO_API_PORT")"; then
+  # Identity, not just "the port answers". A stranger on 8000 answered TCP
+  # exactly as convincingly as the runtime did, and starting a second server
+  # against it produced `[Errno 98] Address already in use` — followed by a
+  # crash in the cleanup path. One HWD-ZERO per port, and this is the check.
+  ok "already running at $ZERO_API_URL (pid $RUNNING_PID) — adopting it"
+  echo "$RUNNING_PID" >"$ZERO_PID_FILE"
   BACKEND_EXPECTED=true
+elif zero_port_busy "$ZERO_API_PORT"; then
+  warn "port $ZERO_API_PORT is held by $(zero_port_occupant "$ZERO_API_PORT")"
+  echo "         ZERO will not kill a process it does not own."
+  echo "         Free it yourself, or run with a different ZERO_API_URL."
 elif [ ! -d "$ZERO_RUNTIME_DIR" ]; then
   warn "not checked out at $ZERO_RUNTIME_DIR"
   echo "         git clone https://github.com/ChrisTheKey/HWD-ZERO \"$ZERO_RUNTIME_DIR\""
@@ -285,9 +296,12 @@ else
   if [ -z "$START_CMD" ]; then
     # HWD-ZERO's own serving layer. `python -m zero.server` is what
     # `pip install -e .` in that repository makes available.
-    START_CMD="$PYTHON_BIN -m zero.server --host 127.0.0.1 --port $(zero_url_port "$ZERO_API_URL") --quiet"
+    START_CMD="$PYTHON_BIN -m zero.server --host 127.0.0.1 --port $ZERO_API_PORT --quiet"
   fi
   warn "starting: $START_CMD"
+  # Where the runtime writes what voice did. Exported rather than baked into
+  # the command so a custom ZERO_START_CMD inherits it too.
+  export ZERO_VOICE_LOG="$VOICE_LOG"
   (
     cd "$ZERO_RUNTIME_DIR" || exit 1
     # `exec` matters: without it `$!` names this shell rather than the server
@@ -326,7 +340,10 @@ if [ "$ZERO_STATE" = "healthy" ]; then
   ok "hwd-zero   healthy"
 else
   warn "hwd-zero   offline — the interface stays up and reports BACKEND OFFLINE"
-  [ -s "$ZERO_LOG" ] && zero_tail_log "$ZERO_LOG" 12
+  # The reason is in the log, and reading it should not require knowing where
+  # the log is. This is the tail the operator would otherwise have to ask for.
+  [ -s "$ZERO_LOG" ] && zero_tail_log "$ZERO_LOG" 40
+  [ -s "$VOICE_LOG" ] && zero_tail_log "$VOICE_LOG" 20
 fi
 case "$WS_STATE" in
   healthy)        ok   "runtime    healthy" ;;

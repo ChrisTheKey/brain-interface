@@ -229,3 +229,126 @@ zero_require_node() {
     exit 1
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Ports, on a phone
+#
+# `OSError: [Errno 98] Address already in use` is the error the operator
+# actually hits, and it has two very different causes: ZERO is already running
+# (fine — use it), or something else holds the port (never something to kill
+# blindly). Everything below is about telling those apart with the tools a
+# Termux install actually has, which is not a fixed set: `lsof` and `ss` are
+# separate packages and neither is guaranteed. /proc is always there.
+# ---------------------------------------------------------------------------
+
+# Pids listening on a TCP port. Prints one per line; prints nothing when it
+# cannot tell. Never guesses, and never matches by process name.
+zero_port_pids() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null && return 0
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    # `users:(("python",pid=1234,fd=5))` — the pid is the only field wanted.
+    ss -lntp 2>/dev/null | awk -v port=":$port" '
+      $4 ~ port"$" { while (match($0, /pid=[0-9]+/)) {
+        print substr($0, RSTART + 4, RLENGTH - 4); $0 = substr($0, RSTART + RLENGTH) } }' \
+      | sort -u && return 0
+  fi
+  # /proc only: find the socket inode for the port, then whichever process has
+  # it open. Slower, but it needs no package at all.
+  local hex inode
+  hex="$(printf '%04X' "$port" 2>/dev/null)" || return 0
+  [ -r /proc/net/tcp ] || return 0
+  for inode in $(awk -v hex=":$hex" '$4 == "0A" && $2 ~ hex"$" { print $10 }' \
+      /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u); do
+    local link pid
+    for link in /proc/[0-9]*/fd/*; do
+      [ -e "$link" ] || continue
+      case "$(readlink "$link" 2>/dev/null)" in
+        "socket:[$inode]")
+          pid="${link#/proc/}"
+          echo "${pid%%/*}"
+          ;;
+      esac
+    done
+  done | sort -u
+}
+
+# What is holding this port, in a sentence. Asks /api/health rather than
+# assuming: a port that answers as HWD-ZERO is ZERO already running.
+zero_port_occupant() {
+  local port="$1" identity pids
+  identity="$(zero_health_field "http://127.0.0.1:$port/api/health" service 2>/dev/null || true)"
+  pids="$(zero_port_pids "$port" | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$identity" = "HWD-ZERO" ]; then
+    local pid
+    pid="$(zero_health_field "http://127.0.0.1:$port/api/health" pid 2>/dev/null || true)"
+    echo "HWD-ZERO (pid ${pid:-${pids:-unknown}})"
+  elif [ -n "$identity" ]; then
+    echo "$identity (pid ${pids:-unknown})"
+  elif [ -n "$pids" ]; then
+    echo "an unidentified process (pid $pids)"
+  else
+    echo "something this shell cannot see (no lsof, no ss, no /proc entry)"
+  fi
+}
+
+# Is an HWD-ZERO already serving this port? Prints its pid when it is.
+#
+# This is the single-instance check. Identity, not liveness: a stranger on
+# port 8000 answered TCP just as convincingly as the runtime did, and starting
+# a second server against it is how the EADDRINUSE crash began.
+zero_zero_on_port() {
+  local port="$1" service pid
+  service="$(zero_health_field "http://127.0.0.1:$port/api/health" service 2>/dev/null || true)"
+  [ "$service" = "HWD-ZERO" ] || return 1
+  pid="$(zero_health_field "http://127.0.0.1:$port/api/health" pid 2>/dev/null || true)"
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  echo "$pid"
+}
+
+# Free a port we own, and only one we own.
+#
+# Refuses unless the port answers as HWD-ZERO *and* its pid matches the pid
+# file this deployment wrote. Anything else is reported and left alone: a
+# process ZERO did not start is never ZERO's to kill.
+zero_release_port() {
+  local port="$1" pid_file="${2:-}" running recorded
+  running="$(zero_zero_on_port "$port" || true)"
+  if [ -z "$running" ]; then
+    echo "port $port is held by $(zero_port_occupant "$port") — not touching it"
+    return 1
+  fi
+  recorded="$(cat "$pid_file" 2>/dev/null || true)"
+  if [ -n "$pid_file" ] && [ "$recorded" != "$running" ]; then
+    echo "HWD-ZERO on port $port (pid $running) was not started from $pid_file — not touching it"
+    return 1
+  fi
+  kill "$running" 2>/dev/null || true
+  local waited=0
+  while kill -0 "$running" 2>/dev/null && [ "$waited" -lt 10 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  kill -0 "$running" 2>/dev/null && kill -9 "$running" 2>/dev/null || true
+  rm -f "$pid_file"
+  echo "released port $port (pid $running)"
+}
+
+# Termux puts pip's console scripts in ~/.local/bin and does not put that on
+# PATH. whisper-cli built by the one-shot lands there too. Adding it here means
+# every ZERO script and every process they start can find both.
+zero_extend_path() {
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) PATH="$HOME/.local/bin:$PATH" ;;
+  esac
+  export PATH
+}
+zero_extend_path
+
+# Child processes write their own logs into the same place the scripts do.
+export ZERO_LOG_DIR
