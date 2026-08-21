@@ -1,75 +1,77 @@
 /**
- * A single, quiet status line. Never a dashboard: it only states whether the
- * brain is looking at a live ZERO and what ZERO could not provide.
+ * The bottom rail: what ZERO is, right now.
+ *
+ * Every value here comes from the operator's own status route. The bar used to
+ * report the interface's connection to a Codex app-server, which was a true
+ * statement about the wrong thing — it said "ZERO disconnected" while HWD-ZERO
+ * was running and answering. What is on screen must be the operator's state,
+ * because that is the state the operator's decisions act on.
  */
-import type { ConnectionState } from '../zero/client';
-import type { GraphModel } from '../graph/model';
-import type { ZeroSnapshot } from '../zero/adapter';
-import type { VoiceState } from '../voice/service';
+import type { OperatorView } from '../state/useOperator';
 
 export interface StatusBarProps {
-  connection: ConnectionState;
-  connectionError: string | null;
-  zeroUrl: string;
-  snapshot: ZeroSnapshot | null;
-  graph: GraphModel;
-  voiceState: VoiceState;
-  voiceReason: string | undefined;
-  onActivateVoice: () => void;
-  onRefresh: () => void;
+  operator: OperatorView;
+  voiceState: string;
+  onToggleVoice: () => void;
 }
 
+const CONNECTION_LABEL: Record<string, string> = {
+  connecting: 'connecting to ZERO',
+  open: 'ZERO online',
+  closed: 'reconnecting',
+  unreachable: 'ZERO unreachable',
+};
+
 export function StatusBar({
-  connection,
-  connectionError,
-  zeroUrl,
-  snapshot,
-  graph,
+  operator,
   voiceState,
-  voiceReason,
-  onActivateVoice,
-  onRefresh,
+  onToggleVoice,
 }: StatusBarProps): React.JSX.Element {
-  const counts = graph.nodes.reduce<Record<string, number>>((accumulator, node) => {
-    accumulator[node.type] = (accumulator[node.type] ?? 0) + 1;
-    return accumulator;
-  }, {});
+  const { status, agents, excluded, connection } = operator;
+  const healthy = agents.filter((agent) => agent.health === 'HEALTHY').length;
 
   return (
-    <div className="status-bar">
+    <footer className="status-bar">
       <span className={`connection connection-${connection}`}>
-        ZERO {connection}
-        <span className="dim"> · {zeroUrl}</span>
+        {CONNECTION_LABEL[connection] ?? connection}
       </span>
-      {snapshot ? (
-        <span className="dim">
-          {counts['agent'] ?? 0} agents · {counts['subAgent'] ?? 0} sub-agents ·{' '}
-          {counts['skill'] ?? 0} knowledge · {counts['mcpServer'] ?? 0} tool providers ·{' '}
-          {counts['tool'] ?? 0} tools
+
+      <span className={`conversation-state state-${operator.zeroState.toLowerCase()}`}>
+        {operator.zeroState}
+      </span>
+
+      <span className="status-agents">
+        {healthy}/{agents.length} agents ready
+      </span>
+
+      {/* The refusal is shown, not hidden: an excluded repository that exists on
+          disk is a decision the operator made, and it should be visible that
+          ZERO is honouring it. */}
+      {excluded.length > 0 && (
+        <span className="status-excluded" title={excluded.join(', ')}>
+          {excluded.length} excluded
         </span>
-      ) : (
-        <span className="dim">waiting for ZERO…</span>
       )}
-      <button type="button" className="text-button" onClick={onRefresh}>
+
+      {operator.approvals.length > 0 && (
+        <span className="status-gate">{operator.approvals.length} awaiting you</span>
+      )}
+
+      {status && (
+        <span className="dim">
+          {status.missions.active} active · {status.missions.total} missions
+        </span>
+      )}
+
+      <button type="button" className="icon-button" onClick={onToggleVoice}>
+        {voiceState === 'speaking' ? 'stop speaking' : 'voice'}
+      </button>
+
+      <button type="button" className="icon-button" onClick={() => void operator.refresh()}>
         refresh
       </button>
-      <button type="button" className="text-button" onClick={onActivateVoice}>
-        voice: {voiceState}
-      </button>
-      {connectionError ? <span className="warn">{connectionError}</span> : null}
-      {voiceReason && voiceState === 'unavailable' ? (
-        <span className="warn">{voiceReason}</span>
-      ) : null}
-      {graph.notes.length > 0 ? (
-        <details className="notes">
-          <summary>{graph.notes.length} data notes</summary>
-          <ul>
-            {graph.notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </div>
+
+      {operator.safeMode && <span className="status-safe">SAFE MODE</span>}
+    </footer>
   );
 }

@@ -13,13 +13,15 @@
  */
 
 import type {
-  ApprovalTicket,
+  OperatorAgent,
   OperatorApproval,
   OperatorEvent,
+  OperatorHealth,
   OperatorMission,
+  OperatorPolicy,
   OperatorRegistry,
-  OperatorState,
-  OperatorTask,
+  OperatorStatus,
+  VoiceReply,
 } from './types';
 
 export interface OperatorClientOptions {
@@ -99,21 +101,24 @@ export class HwdZeroClient {
     return payload as T;
   }
 
-  health(): Promise<{ status: string; safe_mode: boolean }> {
+  health(): Promise<OperatorHealth> {
     return this.get('/api/health');
   }
 
-  state(): Promise<OperatorState> {
-    return this.get('/api/state');
+  status(): Promise<OperatorStatus> {
+    return this.get('/api/status');
   }
 
   registry(): Promise<OperatorRegistry> {
     return this.get('/api/agents');
   }
 
-  async tasks(): Promise<OperatorTask[]> {
-    const payload = await this.get<{ tasks: OperatorTask[] }>('/api/tasks');
-    return payload.tasks ?? [];
+  agent(id: string): Promise<OperatorAgent> {
+    return this.get(`/api/agents/${encodeURIComponent(id)}`);
+  }
+
+  refreshAgents(): Promise<OperatorRegistry> {
+    return this.post('/api/agents/refresh', {});
   }
 
   async missions(): Promise<OperatorMission[]> {
@@ -121,43 +126,89 @@ export class HwdZeroClient {
     return payload.missions ?? [];
   }
 
-  async approvals(): Promise<OperatorApproval[]> {
-    const payload = await this.get<{ approvals: OperatorApproval[] }>('/api/approvals');
-    return payload.approvals ?? [];
+  mission(id: string): Promise<OperatorMission> {
+    return this.get(`/api/missions/${encodeURIComponent(id)}`);
   }
 
-  async journal(missionId: string, limit = 200): Promise<Record<string, unknown>[]> {
-    const payload = await this.get<{ journal: Record<string, unknown>[] }>(
-      `/api/missions/${encodeURIComponent(missionId)}/journal?limit=${limit}`,
+  async approvals(): Promise<OperatorApproval[]> {
+    const payload = await this.get<{ pending: OperatorApproval[] }>('/api/approvals');
+    return payload.pending ?? [];
+  }
+
+  policy(): Promise<OperatorPolicy> {
+    return this.get('/api/policy');
+  }
+
+  async audit(limit = 100): Promise<Record<string, unknown>[]> {
+    const payload = await this.get<{ entries: Record<string, unknown>[] }>(
+      `/api/audit?limit=${limit}`,
     );
-    return payload.journal ?? [];
+    return payload.entries ?? [];
   }
 
   // ----------------------------------------------------------------- writes
 
-  /** Start a mission from a contract the operator already holds. */
-  startMission(task: string): Promise<{ run: Record<string, unknown> }> {
-    return this.post('/api/missions', { task });
+  /** State an objective. ZERO plans it against the agents that are present. */
+  createMission(objective: string, origin = 'operator'): Promise<OperatorMission> {
+    return this.post('/api/missions', { objective, origin });
+  }
+
+  cancelMission(id: string): Promise<OperatorMission> {
+    return this.post(`/api/missions/${encodeURIComponent(id)}/cancel`, {});
   }
 
   /**
-   * Ask for an approval ticket. The server only mints one for a gate it can
-   * see is genuinely pending, and the token comes back exactly once.
+   * Approve one gate.
+   *
+   * The interface sends an id and nothing else. It cannot widen what was
+   * approved, because the payload the operator saw was digested server-side
+   * when the gate was raised and is re-checked at redemption.
    */
-  requestApproval(missionId: string, gate: string): Promise<ApprovalTicket> {
-    return this.post('/api/approvals', { mission_id: missionId, gate });
+  approve(approvalId: string): Promise<OperatorApproval> {
+    return this.post(`/api/approvals/${encodeURIComponent(approvalId)}/approve`, {});
   }
 
-  /** Redeem a ticket. Single use, and refused once it expires. */
-  grantApproval(ticket: ApprovalTicket): Promise<{ approved_gate: string; mission_id: string }> {
-    return this.post(`/api/approvals/${encodeURIComponent(ticket.ticket_id)}/grant`, {
-      token: ticket.token,
+  deny(approvalId: string): Promise<OperatorApproval> {
+    return this.post(`/api/approvals/${encodeURIComponent(approvalId)}/deny`, {});
+  }
+
+  /**
+   * Promote a capability to autonomous — the "CREATE POLICY" button.
+   *
+   * `operator_confirmed` is always true from here because this method is only
+   * reachable from a deliberate operator action. The server refuses without it,
+   * and refuses regardless for any capability on the always-human floor.
+   */
+  grantPolicy(capability: string): Promise<OperatorPolicy> {
+    return this.post('/api/policy/grant', { capability, operator_confirmed: true });
+  }
+
+  revokePolicy(capability: string): Promise<OperatorPolicy> {
+    return this.post('/api/policy/revoke', { capability });
+  }
+
+  /** The kill switch. Server-side: it stops the laptop, not just this screen. */
+  stop(reason = 'operator pressed STOP ZERO'): Promise<{ safe_mode: boolean }> {
+    return this.post('/api/system/stop', { reason });
+  }
+
+  resume(): Promise<{ safe_mode: boolean }> {
+    return this.post('/api/system/resume', { by: 'operator' });
+  }
+
+  /** A finished transcript, from this device's microphone. */
+  sendTranscript(text: string): Promise<VoiceReply> {
+    return this.post('/api/voice/transcript', { text });
+  }
+
+  /** Recorded audio, transcribed on the laptop rather than on the phone. */
+  async sendAudio(audio: Blob): Promise<VoiceReply | { ok: false; detail: string }> {
+    const response = await this.fetchImpl(joinPath(this.baseUrl, '/api/voice/audio'), {
+      method: 'POST',
+      headers: { 'content-type': audio.type || 'application/octet-stream' },
+      body: audio,
     });
-  }
-
-  /** The kill switch. On refuses every execution until a human turns it off. */
-  setSafeMode(enabled: boolean): Promise<{ safe_mode: boolean }> {
-    return this.post('/api/control/safe-mode', { enabled });
+    return this.unwrap(response);
   }
 
   // ----------------------------------------------------------------- events
@@ -166,8 +217,14 @@ export class HwdZeroClient {
     if (this.baseUrl) {
       return `${this.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws/events`;
     }
-    const { protocol, host } = window.location;
-    return `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws/events`;
+    // Same origin as the page the gateway served, so the socket inherits the
+    // gateway's authentication and needs no address of its own. Outside a
+    // browser there is no origin to inherit; returning a relative path keeps
+    // this total rather than throwing, and a caller with no window is a test or
+    // a server renderer, neither of which opens a real socket.
+    const location = typeof window === 'undefined' ? undefined : window.location;
+    if (!location) return '/ws/events';
+    return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/events`;
   }
 
   /**

@@ -621,3 +621,289 @@ body,
     max-height: 42vh;
   }
 }
+
+/* ------------------------------------------------------------------ brain 3D
+   The WebGL canvas fills the viewport under the panels; labels are DOM on top
+   of it so they stay crisp at any zoom and remain selectable text. */
+.brain-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  touch-action: none; /* the scene handles drag and pinch itself */
+  cursor: grab;
+}
+.brain-stage:active {
+  cursor: grabbing;
+}
+
+.brain-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.brain-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.24rem 0.46rem;
+  margin: -0.8rem 0 0 0.9rem;
+  background: rgba(4, 4, 8, 0.68);
+  border: 1px solid;
+  border-radius: 3px;
+  backdrop-filter: blur(3px);
+  white-space: nowrap;
+  transition: opacity 160ms ease;
+}
+.brain-label b {
+  font-size: 0.56rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: rgba(238, 240, 252, 0.9);
+}
+.brain-label i {
+  font-size: 0.5rem;
+  font-style: normal;
+  letter-spacing: 0.14em;
+  opacity: 0.85;
+}
+.brain-label-selected {
+  background: rgba(10, 6, 12, 0.92);
+}
+
+/* ------------------------------------------------------------ approval gate */
+.approval-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.approval-capability {
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  color: rgba(255, 190, 120, 0.95);
+}
+.approval-risk {
+  font-size: 0.54rem;
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+}
+.approval[data-risk='high'] {
+  border-left: 2px solid rgba(255, 96, 96, 0.8);
+}
+.approval[data-risk='medium'] {
+  border-left: 2px solid rgba(255, 178, 106, 0.7);
+}
+
+.approval-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.05rem 0.5rem;
+  margin: 0.4rem 0;
+  font-size: 0.56rem;
+}
+.approval-facts > div {
+  display: contents;
+}
+.approval-facts dt {
+  opacity: 0.55;
+  letter-spacing: 0.1em;
+}
+.approval-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-payload-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.52rem;
+  letter-spacing: 0.1em;
+  opacity: 0.6;
+  cursor: pointer;
+  color: inherit;
+}
+.approval-payload {
+  max-height: 8rem;
+  overflow: auto;
+  margin: 0.3rem 0;
+  padding: 0.35rem;
+  font-size: 0.54rem;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 2px;
+}
+.approval-policy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  font-size: 0.54rem;
+}
+
+/* --------------------------------------------------------------- mission steps */
+.mission-steps {
+  display: inline-flex;
+  gap: 0.12rem;
+  margin-left: 0.4rem;
+  font-family: ui-monospace, monospace;
+}
+.mission-steps .step {
+  text-decoration: none;
+  opacity: 0.75;
+}
+.step-done {
+  color: rgba(112, 228, 190, 0.95);
+}
+.step-failed {
+  color: rgba(255, 110, 110, 0.95);
+}
+.step-skipped {
+  color: rgba(200, 200, 210, 0.5);
+}
+.step-awaiting_approval {
+  color: rgba(255, 178, 106, 1);
+}
+.step-running {
+  color: rgba(110, 208, 255, 1);
+}
+
+/* ------------------------------------------------------------- agent detail */
+.detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.detail-head h2 {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+}
+.detail-rows {
+  margin: 0.5rem 0;
+}
+.detail-subhead {
+  margin: 0.6rem 0 0.25rem;
+  font-size: 0.54rem;
+  letter-spacing: 0.14em;
+  opacity: 0.55;
+  text-transform: uppercase;
+}
+.capability-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.52rem;
+}
+.capability-list li {
+  padding: 0.1rem 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  opacity: 0.8;
+}
+.capability-gated {
+  border-color: rgba(255, 178, 106, 0.55);
+  color: rgba(255, 202, 150, 0.95);
+  opacity: 1;
+}
+.detail-scope {
+  margin-top: 0.5rem;
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  opacity: 0.45;
+}
+
+/* ------------------------------------------------------------ mobile layout
+   The Galaxy is a primary device: the approval card and the kill switch must
+   stay reachable with a thumb, so the operator panel docks to the bottom and
+   the brain keeps the whole screen behind it. */
+@media (max-width: 820px) {
+  .operator {
+    position: fixed;
+    inset: auto 0 0 0;
+    max-height: 52vh;
+    overflow-y: auto;
+    border-radius: 10px 10px 0 0;
+    padding-bottom: max(0.6rem, env(safe-area-inset-bottom));
+  }
+  .detail-panel {
+    position: fixed;
+    inset: auto 0 auto 0;
+    top: 3.2rem;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  .approval-actions button,
+  .kill-switch {
+    min-height: 44px; /* a thumb target, not a mouse target */
+    flex: 1;
+  }
+  .brain-label b {
+    font-size: 0.5rem;
+  }
+  .brain-label i {
+    font-size: 0.44rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brain-label {
+    transition: none;
+  }
+}
+
+/* A scrim between the reference image and the brain.
+   The image is the atmosphere, not the subject: without this the backdrop's own
+   magenta ridges compete with the neurons and the graph stops being readable,
+   which is the one thing the brief will not trade for atmosphere. */
+.background::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 62% 58% at 50% 48%, rgba(0, 0, 0, 0.86) 0%, rgba(0, 0, 0, 0.62) 45%, rgba(0, 0, 0, 0.3) 72%, transparent 100%),
+    linear-gradient(to bottom, rgba(2, 0, 4, 0.55), rgba(2, 0, 4, 0.3) 40%, rgba(2, 0, 4, 0.6));
+  pointer-events: none;
+}
+
+/* Labels sit clear of their hub rather than on top of it. */
+.brain-label {
+  margin: -0.55rem 0 0 1.5rem;
+}
+
+/* --------------------------------------------------------------- status bar */
+.status-bar {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.4rem 0.9rem max(0.4rem, env(safe-area-inset-bottom));
+  font-size: 0.55rem;
+  letter-spacing: 0.09em;
+  background: linear-gradient(to top, rgba(2, 0, 4, 0.9), transparent);
+}
+.status-agents,
+.status-excluded {
+  opacity: 0.65;
+}
+.status-excluded {
+  color: rgba(200, 200, 210, 0.7);
+}
+.status-gate {
+  color: rgba(255, 178, 106, 1);
+}
+.status-safe {
+  color: rgba(255, 96, 96, 1);
+  font-weight: 600;
+}

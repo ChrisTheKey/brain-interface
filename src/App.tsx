@@ -1,16 +1,15 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { BrainStage } from './ui/BrainStage';
-import { DetailPanel } from './ui/DetailPanel';
-import { NodeTooltip } from './ui/NodeTooltip';
+import { BrainStage3D } from './ui/BrainStage3D';
+import { AgentDetail } from './ui/AgentDetail';
 import { OperatorPanel } from './ui/OperatorPanel';
 import { StatusBar } from './ui/StatusBar';
 import { VoiceBar } from './ui/VoiceBar';
 import { useZeroBrain } from './state/useZeroBrain';
 import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
 import { useOperator } from './state/useOperator';
+import { useAgentActivity } from './state/useAgentActivity';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
-import type { GraphNode } from './graph/model';
 import type { ZeroAgent } from './zero/agentRegistry';
 import type { GraphRuntime } from './graph/transform';
 
@@ -20,16 +19,17 @@ export default function App(): React.JSX.Element {
   const [operatorClient] = useState(() => new HwdZeroClient());
   const operator = useOperator(operatorClient);
 
+  // What the brain draws comes from ZERO's own event stream: an agent glows
+  // because the operator said it started, never because the interface guessed.
+  const activity = useAgentActivity(operator.events);
+
   // Runtime facts about agent runs feed back into the graph, so an agent node
   // is `active` exactly while its ZERO thread runs.
   const [runtime, setRuntime] = useState<GraphRuntime>({});
   const agentTasksRef = useRef<Map<string, { task: string; status: string; at: number }>>(new Map());
   const brain = useZeroBrain(runtime);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [hovered, setHovered] = useState<{
-    node: GraphNode | null;
-    position: { x: number; y: number } | null;
-  }>({ node: null, position: null });
+  /** The child agent the operator has focused in the 3D brain, if any. */
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   const agents = useMemo<ZeroAgent[]>(() => brain.snapshot?.agents ?? [], [brain.snapshot]);
 
@@ -74,28 +74,19 @@ export default function App(): React.JSX.Element {
     onAgentActivity: handleAgentActivity,
   });
 
-  const selectedNode = useMemo(
-    () => brain.graph.nodes.find((node) => node.id === selectedId) ?? null,
-    [brain.graph, selectedId],
-  );
-
-  const selectedAgent = useMemo<ZeroAgent | null>(() => {
-    if (!selectedNode || selectedNode.type !== 'agent') return null;
-    const agentId = selectedNode.metadata['agentId'];
-    if (typeof agentId !== 'string') return null;
-    return agents.find((agent) => agent.id === agentId) ?? null;
-  }, [agents, selectedNode]);
-
-  const handleHover = useCallback(
-    (node: GraphNode | null, position: { x: number; y: number } | null) => {
-      setHovered({ node, position });
-    },
-    [],
-  );
-
-  const handleSelect = useCallback((node: GraphNode | null) => {
-    setSelectedId(node?.id ?? null);
-  }, []);
+  // The renderer wants normalised bands; the analyser reports amplitude/peak.
+  // Converted here rather than in the render loop so the shape the scene reads
+  // is stable regardless of which analyser is behind it.
+  const audioBands = useCallback(() => {
+    const levels = brain.levels();
+    return {
+      rms: levels.amplitude,
+      low: levels.low,
+      mid: (levels.amplitude + levels.high) * 0.5,
+      high: levels.high,
+      transient: levels.onset,
+    };
+  }, [brain]);
 
   return (
     <div className="app">
@@ -104,28 +95,22 @@ export default function App(): React.JSX.Element {
         style={{ backgroundImage: `url(${config.backgroundImage})` }}
         aria-hidden="true"
       />
-      <BrainStage
-        graph={brain.graph}
-        pulsesRef={brain.pulsesRef}
-        levels={brain.levels}
-        conversation={voice.state}
+      <BrainStage3D
+        agents={operator.agents}
+        zeroState={operator.zeroState}
+        activityRef={activity.activityRef}
+        gatedRef={activity.gatedRef}
+        flowRef={activity.flowRef}
+        audio={audioBands}
         micLevel={voice.micLevel}
-        selectedId={selectedId}
-        onSelect={handleSelect}
-        onHover={handleHover}
+        selectedId={selectedAgentId}
+        onSelect={setSelectedAgentId}
       />
       <OperatorPanel operator={operator} />
-      <NodeTooltip node={hovered.node} position={hovered.position} />
-      <DetailPanel
-        node={selectedNode}
-        graph={brain.graph}
-        activity={brain.activity}
-        agent={selectedAgent}
-        agentBusy={voice.state === 'agentActive' || voice.state === 'processing'}
-        onRunAgent={voice.runAgent}
-        onClose={() => setSelectedId(null)}
-        onSelect={(id) => setSelectedId(id)}
-        onSpeak={(text) => void brain.speak(text)}
+      <AgentDetail
+        agent={operator.agents.find((entry) => entry.id === selectedAgentId) ?? null}
+        missions={operator.missions}
+        onClose={() => setSelectedAgentId(null)}
       />
       <VoiceBar
         state={voice.state}
@@ -139,18 +124,12 @@ export default function App(): React.JSX.Element {
         onSubmitText={voice.submitText}
       />
       <StatusBar
-        connection={brain.connection}
-        connectionError={brain.connectionError}
-        zeroUrl={config.zeroWsUrl}
-        snapshot={brain.snapshot}
-        graph={brain.graph}
+        operator={operator}
         voiceState={brain.voiceState}
-        voiceReason={brain.voiceReason}
-        onActivateVoice={() => {
+        onToggleVoice={() => {
           if (brain.voiceState === 'speaking') brain.stopSpeaking();
-          else void brain.speak(brain.lastAgentMessage ?? 'ZERO online.');
+          else void brain.speak('ZERO online.');
         }}
-        onRefresh={brain.refresh}
       />
     </div>
   );

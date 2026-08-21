@@ -29,3 +29,6 @@ coverage/
 .DS_Store
 *.log
 npm-debug.log*
+
+# Gateway access token — generated on first run, never committed
+.zero/

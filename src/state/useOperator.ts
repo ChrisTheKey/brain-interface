@@ -1,202 +1,227 @@
+/**
+ * The operator's live state, as this device sees it.
+ *
+ * One rule shapes this hook: HWD-ZERO holds the truth, and the interface holds
+ * a *view* of it. Nothing here is computed optimistically — approving a gate
+ * does not mark it approved locally and hope, it calls the server and waits for
+ * the event. A phone whose screen was off for ten minutes and a laptop that
+ * never slept therefore converge on the same picture, because both are showing
+ * the same server state rather than two divergent local guesses.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { OperatorError } from '../hwd/client';
 import type { HwdZeroClient } from '../hwd/client';
 import type {
+  OperatorAgent,
   OperatorApproval,
   OperatorConnection,
   OperatorEvent,
   OperatorMission,
+  OperatorPolicy,
   OperatorRegistry,
-  OperatorState,
-  OperatorTask,
+  OperatorStatus,
+  VoiceReply,
+  ZeroState,
 } from '../hwd/types';
 
-/**
- * HWD-ZERO's live state, as the interface sees it.
- *
- * Two sources, on purpose. The event stream is what makes the brain move —
- * it is pushed, immediate, and driven by mission journals. The periodic read
- * is the correction: after a reconnect, or a mission the phone slept through,
- * the lists come from the operator rather than from replayed events. Nothing
- * here derives state the operator did not report.
- */
-
-export const OPERATOR_EVENT_LIMIT = 200;
+/** How often the structural view is re-read. Events drive everything urgent. */
+const REFRESH_INTERVAL_MS = 15_000;
+/** Events kept for the activity feed. Bounded so a long session cannot grow. */
+const EVENT_BUFFER = 200;
 
 export interface OperatorView {
   connection: OperatorConnection;
-  error: string;
-  state: OperatorState | null;
+  zeroState: ZeroState;
+  safeMode: boolean;
+  status: OperatorStatus | null;
   registry: OperatorRegistry | null;
+  agents: OperatorAgent[];
+  /** Repositories the exclusion list refused. Never rendered as agents. */
+  excluded: string[];
   missions: OperatorMission[];
   approvals: OperatorApproval[];
-  tasks: OperatorTask[];
+  policy: OperatorPolicy | null;
   events: OperatorEvent[];
-  /** Missions the operator currently reports as running. */
-  runningMissionIds: string[];
-  safeMode: boolean;
+  error: string | null;
+  busy: boolean;
+
+  createMission: (objective: string) => Promise<OperatorMission | null>;
+  cancelMission: (id: string) => Promise<void>;
+  approve: (approvalId: string) => Promise<void>;
+  deny: (approvalId: string) => Promise<void>;
+  createPolicy: (capability: string) => Promise<void>;
+  stop: () => Promise<void>;
+  resume: () => Promise<void>;
+  sendTranscript: (text: string) => Promise<VoiceReply | null>;
   refresh: () => Promise<void>;
-  startMission: (task: string) => Promise<void>;
-  approve: (approval: OperatorApproval) => Promise<void>;
-  setSafeMode: (enabled: boolean) => Promise<void>;
 }
 
-function describe(error: unknown): string {
-  if (error instanceof OperatorError) {
-    return error.status === 502 || error.status === 503
-      ? 'HWD-ZERO is not answering — start it with `zero serve`'
-      : error.message;
-  }
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function useOperator(
-  client: HwdZeroClient,
-  options: { pollIntervalMs?: number } = {},
-): OperatorView {
-  const pollIntervalMs = Math.max(2_000, options.pollIntervalMs ?? 10_000);
+export function useOperator(client: HwdZeroClient): OperatorView {
   const [connection, setConnection] = useState<OperatorConnection>('connecting');
-  const [error, setError] = useState('');
-  const [state, setState] = useState<OperatorState | null>(null);
+  const [status, setStatus] = useState<OperatorStatus | null>(null);
   const [registry, setRegistry] = useState<OperatorRegistry | null>(null);
   const [missions, setMissions] = useState<OperatorMission[]>([]);
   const [approvals, setApprovals] = useState<OperatorApproval[]>([]);
-  const [tasks, setTasks] = useState<OperatorTask[]>([]);
+  const [policy, setPolicy] = useState<OperatorPolicy | null>(null);
   const [events, setEvents] = useState<OperatorEvent[]>([]);
-  const mounted = useRef(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [zeroState, setZeroState] = useState<ZeroState>('IDLE');
 
-  const refresh = useCallback(async () => {
+  /** Deduplicates the buffer the server replays on every reconnect. */
+  const seenEvents = useRef<Set<string>>(new Set());
+
+  const refresh = useCallback(async (): Promise<void> => {
     try {
-      const [nextState, nextRegistry, nextMissions, nextApprovals, nextTasks] = await Promise.all([
-        client.state(),
+      const [nextStatus, nextRegistry, nextMissions, nextApprovals] = await Promise.all([
+        client.status(),
         client.registry(),
         client.missions(),
         client.approvals(),
-        client.tasks(),
       ]);
-      if (!mounted.current) return;
-      setState(nextState);
+      setStatus(nextStatus);
+      setZeroState(nextStatus.zero_state);
       setRegistry(nextRegistry);
       setMissions(nextMissions);
       setApprovals(nextApprovals);
-      setTasks(nextTasks);
-      setError('');
+      setPolicy(nextStatus.policy);
+      setError(null);
+      setConnection((current) => (current === 'unreachable' ? 'open' : current));
     } catch (cause) {
-      if (!mounted.current) return;
+      setError(cause instanceof Error ? cause.message : String(cause));
       setConnection('unreachable');
-      setError(describe(cause));
     }
   }, [client]);
 
   useEffect(() => {
-    mounted.current = true;
-    // The first read is scheduled rather than run in the effect body: it is
-    // the same polling subscription as every later one, just at zero delay,
-    // and it keeps the effect free of a synchronous cascading render.
-    const initial = setTimeout(() => void refresh(), 0);
-    const timer = setInterval(() => void refresh(), pollIntervalMs);
+    // The first read is scheduled rather than run inline: an effect that calls
+    // setState synchronously forces a second render pass before paint, and this
+    // one is a network read whose result is never needed that early.
+    const first = setTimeout(() => void refresh(), 0);
+    const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
-      mounted.current = false;
-      clearTimeout(initial);
+      clearTimeout(first);
       clearInterval(timer);
     };
-  }, [refresh, pollIntervalMs]);
+  }, [refresh]);
 
   useEffect(() => {
-    const stop = client.connectEvents({
+    const disconnect = client.connectEvents({
       onOpen: () => {
         setConnection('open');
-        setError('');
+        // The socket coming back is the moment a phone rejoins after its screen
+        // was off; re-read rather than trust the replayed buffer alone.
+        void refresh();
       },
       onClose: () => setConnection('closed'),
       onError: (message) => setError(message),
       onEvent: (event) => {
-        setEvents((current) => {
-          // The server replays its buffer on reconnect, so an event we already
-          // hold arrives again. The id decides, not the arrival order.
-          if (current.some((seen) => seen.event_id === event.event_id)) return current;
-          const next = [...current, event];
-          return next.length > OPERATOR_EVENT_LIMIT
-            ? next.slice(next.length - OPERATOR_EVENT_LIMIT)
-            : next;
-        });
-        // A mission that finished or a gate that opened changes the lists,
-        // and those come from the operator rather than from the event.
+        if (seenEvents.current.has(event.event_id)) return;
+        seenEvents.current.add(event.event_id);
+        if (seenEvents.current.size > EVENT_BUFFER * 4) {
+          seenEvents.current = new Set([...seenEvents.current].slice(-EVENT_BUFFER));
+        }
+
+        setEvents((current) => [...current, event].slice(-EVENT_BUFFER));
+
+        if (event.type === 'zero.state.changed') {
+          const next = event.payload.state;
+          if (typeof next === 'string') setZeroState(next as ZeroState);
+        }
+
+        // Anything that changes what the operator must decide or see is re-read
+        // from the server rather than patched locally.
         if (
+          event.type === 'approval.required' ||
+          event.type === 'approval.approved' ||
+          event.type === 'approval.denied' ||
           event.type === 'mission.completed' ||
           event.type === 'mission.failed' ||
-          event.type === 'approval.required' ||
-          event.type === 'approval.approved'
+          event.type === 'mission.created' ||
+          event.type === 'system.safe_mode' ||
+          event.type === 'system.resumed' ||
+          event.type === 'policy.changed'
         ) {
           void refresh();
         }
       },
     });
-    return stop;
+    return disconnect;
   }, [client, refresh]);
 
-  const startMission = useCallback(
-    async (task: string) => {
+  const guard = useCallback(
+    async <T,>(action: () => Promise<T>): Promise<T | null> => {
+      setBusy(true);
       try {
-        await client.startMission(task);
-        setError('');
-        await refresh();
+        const result = await action();
+        setError(null);
+        return result;
       } catch (cause) {
-        setError(describe(cause));
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return null;
+      } finally {
+        setBusy(false);
+        await refresh();
       }
     },
-    [client, refresh],
+    [refresh],
   );
 
+  const createMission = useCallback(
+    (objective: string) => guard(() => client.createMission(objective)),
+    [client, guard],
+  );
+  const cancelMission = useCallback(
+    async (id: string) => void (await guard(() => client.cancelMission(id))),
+    [client, guard],
+  );
   const approve = useCallback(
-    async (approval: OperatorApproval) => {
-      try {
-        // Two steps, deliberately: the server mints a ticket bound to this
-        // exact gate and payload, and the grant redeems that one ticket. A
-        // client cannot approve by asserting that something is approved.
-        const ticket = await client.requestApproval(approval.mission_id, approval.gate);
-        await client.grantApproval(ticket);
-        setError('');
-        await refresh();
-      } catch (cause) {
-        setError(describe(cause));
-      }
-    },
-    [client, refresh],
+    async (approvalId: string) => void (await guard(() => client.approve(approvalId))),
+    [client, guard],
+  );
+  const deny = useCallback(
+    async (approvalId: string) => void (await guard(() => client.deny(approvalId))),
+    [client, guard],
+  );
+  const createPolicy = useCallback(
+    async (capability: string) => void (await guard(() => client.grantPolicy(capability))),
+    [client, guard],
+  );
+  const stop = useCallback(async () => void (await guard(() => client.stop())), [client, guard]);
+  const resume = useCallback(
+    async () => void (await guard(() => client.resume())),
+    [client, guard],
+  );
+  const sendTranscript = useCallback(
+    (text: string) => guard(() => client.sendTranscript(text)),
+    [client, guard],
   );
 
-  const setSafeMode = useCallback(
-    async (enabled: boolean) => {
-      try {
-        await client.setSafeMode(enabled);
-        setError('');
-        await refresh();
-      } catch (cause) {
-        setError(describe(cause));
-      }
-    },
-    [client, refresh],
-  );
-
-  const runningMissionIds = useMemo(
-    () => missions.filter((mission) => mission.status === 'RUNNING').map((m) => m.mission_id),
-    [missions],
-  );
+  const agents = useMemo(() => registry?.agents ?? [], [registry]);
+  const excluded = useMemo(() => registry?.excluded ?? [], [registry]);
+  const safeMode = status?.safe_mode.safe_mode ?? false;
 
   return {
     connection,
-    error,
-    state,
+    zeroState: safeMode ? 'SAFE_MODE' : zeroState,
+    safeMode,
+    status,
     registry,
+    agents,
+    excluded,
     missions,
     approvals,
-    tasks,
+    policy,
     events,
-    runningMissionIds,
-    safeMode: state?.safe_mode ?? false,
-    refresh,
-    startMission,
+    error,
+    busy,
+    createMission,
+    cancelMission,
     approve,
-    setSafeMode,
+    deny,
+    createPolicy,
+    stop,
+    resume,
+    sendTranscript,
+    refresh,
   };
 }
