@@ -34,6 +34,9 @@ export const ZERO_RUNTIME_WS_PATH = '/ws';
 /** Public path of HWD-ZERO's operator event stream. */
 export const ZERO_EVENTS_WS_PATH = '/ws/events';
 
+/** Public path of HWD-ZERO's voice transport: microphone audio in, transcripts out. */
+export const ZERO_VOICE_WS_PATH = '/ws/voice';
+
 /** Public path of the gateway's composite health probe. */
 export const ZERO_HEALTH_PATH = '/api/health';
 
@@ -82,4 +85,22 @@ export function zeroRuntimeWsUrl(location: LocationLike = browserLocation()): st
 /** `ws(s)://<this origin>/ws/events` — HWD-ZERO's operator stream. */
 export function zeroEventsWsUrl(location: LocationLike = browserLocation()): string {
   return sameOriginWsUrl(ZERO_EVENTS_WS_PATH, location);
+}
+
+/**
+ * `ws(s)://<this origin>/ws/voice` — the microphone transport.
+ *
+ * Same-origin like everything else, so audio from the phone reaches HWD-ZERO
+ * through the gateway and never through an internal port the browser would
+ * have to know.
+ */
+export function zeroVoiceWsUrl(
+  query: { session?: string; language?: string } = {},
+  location: LocationLike = browserLocation(),
+): string {
+  const parameters = new URLSearchParams();
+  if (query.session) parameters.set('session', query.session);
+  if (query.language) parameters.set('language', query.language);
+  const search = parameters.toString();
+  return `${sameOriginWsUrl(ZERO_VOICE_WS_PATH, location)}${search ? `?${search}` : ''}`;
 }

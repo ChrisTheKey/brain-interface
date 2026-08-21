@@ -63,6 +63,8 @@ export const DEFAULT_ZERO_RUNTIME_WS = 'ws://127.0.0.1:8787';
 export const PUBLIC_API_BASE = '/api';
 export const PUBLIC_WS_PATH = '/ws';
 export const PUBLIC_EVENTS_WS_PATH = '/ws/events';
+/** Microphone audio to HWD-ZERO's voice service. Same origin, like everything else. */
+export const PUBLIC_VOICE_WS_PATH = '/ws/voice';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -217,6 +219,11 @@ export function resolveStaticPath(distDir, urlPath) {
 export function resolveWsRoute(pathname, config) {
   if (pathname === PUBLIC_EVENTS_WS_PATH) {
     return { target: config.zeroApi, path: PUBLIC_EVENTS_WS_PATH, upstream: 'zeroApi' };
+  }
+  // Voice lives on HWD-ZERO, which is the runtime. The browser reaches it the
+  // same way it reaches everything else: through this origin, never directly.
+  if (pathname === PUBLIC_VOICE_WS_PATH) {
+    return { target: config.zeroApi, path: PUBLIC_VOICE_WS_PATH, upstream: 'zeroApi' };
   }
   if (pathname === PUBLIC_WS_PATH || pathname === `${PUBLIC_WS_PATH}/`) {
     // The runtime URL carries its own path (`ws://host:port/` for
@@ -429,6 +436,7 @@ export async function collectHealth(config, extra = {}) {
       api: PUBLIC_API_BASE,
       ws: PUBLIC_WS_PATH,
       events: PUBLIC_EVENTS_WS_PATH,
+      voice: PUBLIC_VOICE_WS_PATH,
     },
     ...extra,
   };

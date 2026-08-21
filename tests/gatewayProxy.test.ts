@@ -187,7 +187,12 @@ describe('gateway HTTP proxy', () => {
     const body = await response.json();
     expect(body).toMatchObject({ gateway: 'healthy', zero: 'healthy', websocket: 'healthy' });
     // The browser is told the public paths, never the internal ones.
-    expect(body.publicPaths).toEqual({ api: '/api', ws: '/ws', events: '/ws/events' });
+    expect(body.publicPaths).toEqual({
+      api: '/api',
+      ws: '/ws',
+      events: '/ws/events',
+      voice: '/ws/voice',
+    });
   });
 
   it('serves the interface even while ZERO is down, and says so', async () => {
@@ -254,6 +259,12 @@ describe('WebSocket routing', () => {
     expect(resolveWsRoute('/ws/events', routes)).toMatchObject({
       upstream: 'zeroApi',
       path: '/ws/events',
+    });
+    // Voice is HWD-ZERO's too — it is the runtime, and voice is one of its
+    // capabilities rather than a service beside it.
+    expect(resolveWsRoute('/ws/voice', routes)).toMatchObject({
+      upstream: 'zeroApi',
+      path: '/ws/voice',
     });
     expect(resolveWsRoute('/websocket', routes)).toBeNull();
     expect(resolveWsRoute('/', routes)).toBeNull();

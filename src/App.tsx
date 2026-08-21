@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrainStage } from './ui/BrainStage';
 import { DetailPanel } from './ui/DetailPanel';
 import { NodeTooltip } from './ui/NodeTooltip';
@@ -7,10 +7,10 @@ import { StatusBar } from './ui/StatusBar';
 import { VoiceBar } from './ui/VoiceBar';
 import { ZeroPanel } from './ui/ZeroPanel';
 import { useZeroBrain } from './state/useZeroBrain';
-import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
 import { useOperator } from './state/useOperator';
 import { useZeroStatus } from './state/useZeroStatus';
 import { useChildAgents } from './state/useChildAgents';
+import { useVoiceTurn, visualStateFor } from './state/useVoiceTurn';
 import { zeroNodeDescription, zeroNodeLabel, zeroNodeStatus } from './zero/connectionState';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
@@ -71,45 +71,51 @@ export default function App(): React.JSX.Element {
 
   const agents = useMemo<ZeroAgent[]>(() => brain.snapshot?.agents ?? [], [brain.snapshot]);
 
-  const handleAgentActivity = useCallback(
-    (
-      agentId: string,
-      phase: 'start' | 'finish',
-      detail?: { task?: string; result?: { status: string } },
-    ) => {
-      // Real activity, real pulse: the ZERO → agent edge lights up exactly
-      // while that agent's thread is running.
-      const now = Date.now();
-      brain.pulsesRef.current.set(`agent:${agentId}`, {
-        energy: phase === 'start' ? 1 : 0.4,
-        at: now,
-      });
-      brain.pulsesRef.current.set('zero', { energy: 0.8, at: now });
+  // Agent activity in the graph comes from the operator's real event stream:
+  // `agent.started` / `agent.completed` are facts HWD-ZERO published, not
+  // something the interface inferred from its own routing. Previously these
+  // pulses came from the codex loop, so with codex offline the graph never
+  // moved even while missions ran.
+  const latestEvent = operator.events.at(-1);
+  useEffect(() => {
+    if (!latestEvent) return;
+    const agentId = latestEvent.agent_id;
+    if (!agentId || agentId === 'zero') return;
+    const started =
+      latestEvent.type === 'agent.started' || latestEvent.type === 'agent.activity';
+    const finished =
+      latestEvent.type === 'agent.completed' || latestEvent.type === 'agent.error';
+    if (!started && !finished) return;
 
-      const tasks = agentTasksRef.current;
-      const previous = tasks.get(agentId);
-      tasks.set(agentId, {
-        task: detail?.task ?? previous?.task ?? '',
-        status: phase === 'start' ? 'running' : (detail?.result?.status ?? 'completed'),
-        at: now,
-      });
-      setRuntime((current) => ({
-        activeAgentIds:
-          phase === 'start'
-            ? [...new Set([...(current.activeAgentIds ?? []), agentId])]
-            : (current.activeAgentIds ?? []).filter((id) => id !== agentId),
-        agentTasks: new Map(tasks),
-      }));
-    },
-    [brain.pulsesRef],
-  );
+    // Real activity, real pulse: the ZERO → agent edge lights up exactly while
+    // that agent is running.
+    const now = Date.now();
+    brain.pulsesRef.current.set(`agent:${agentId}`, { energy: started ? 1 : 0.4, at: now });
+    brain.pulsesRef.current.set('zero', { energy: 0.8, at: now });
 
-  const voice = useZeroVoiceLoop({
-    client: brain.client,
-    agents,
+    const tasks = agentTasksRef.current;
+    const previous = tasks.get(agentId);
+    tasks.set(agentId, {
+      task: String(latestEvent.payload['task'] ?? previous?.task ?? ''),
+      status: started ? 'running' : latestEvent.type === 'agent.error' ? 'error' : 'completed',
+      at: now,
+    });
+    setRuntime((current) => ({
+      activeAgentIds: started
+        ? [...new Set([...(current.activeAgentIds ?? []), agentId])]
+        : (current.activeAgentIds ?? []).filter((id) => id !== agentId),
+      agentTasks: new Map(tasks),
+    }));
+  }, [latestEvent, brain.pulsesRef]);
+
+
+  // The spoken turn. It talks to HWD-ZERO — the runtime — rather than to the
+  // optional codex client the old loop routed through, which is why speaking
+  // did nothing while CODEX EXECUTOR was offline.
+  const voice = useVoiceTurn({
+    language: config.speech.language,
     speak: brain.speak,
     stopSpeaking: brain.stopSpeaking,
-    onAgentActivity: handleAgentActivity,
   });
 
   const selectedNode = useMemo(
@@ -146,7 +152,7 @@ export default function App(): React.JSX.Element {
         graph={graph}
         pulsesRef={brain.pulsesRef}
         levels={brain.levels}
-        conversation={voice.state}
+        conversation={visualStateFor(voice.state)}
         micLevel={voice.micLevel}
         selectedId={selectedId}
         onSelect={handleSelect}
@@ -179,23 +185,12 @@ export default function App(): React.JSX.Element {
         graph={graph}
         activity={brain.activity}
         agent={selectedAgent}
-        agentBusy={voice.state === 'agentActive' || voice.state === 'processing'}
-        onRunAgent={voice.runAgent}
+        agentBusy={voice.state === 'executing' || voice.state === 'understanding'}
         onClose={() => setSelectedId(null)}
         onSelect={(id) => setSelectedId(id)}
         onSpeak={(text) => void brain.speak(text)}
       />
-      <VoiceBar
-        state={voice.state}
-        listening={voice.listening}
-        speechSupported={voice.speechSupported}
-        transcript={voice.transcript}
-        answer={voice.answer}
-        error={voice.error}
-        activeAgents={voice.activeAgentIds}
-        onToggleListening={voice.startListening}
-        onSubmitText={voice.submitText}
-      />
+      <VoiceBar voice={voice} onInterrupt={voice.interrupt} />
       <StatusBar
         status={status}
         connectionError={brain.connectionError}

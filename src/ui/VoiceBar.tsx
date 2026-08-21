@@ -1,91 +1,164 @@
 /**
- * The conversation strip: microphone control, ZERO's state, the live
- * transcript and the answer. Deliberately one quiet line — the brain stays
- * the interface.
+ * The conversation strip: press to speak, watch ZERO hear you, read the answer.
+ *
+ * The input field and the transcript are the same surface on purpose. What
+ * ZERO heard belongs where what you type would go, because they are the same
+ * request taking the same path — showing them in separate places would suggest
+ * two pipelines, and there is only one.
+ *
+ * Nothing here disappears on its own. The last final transcript and ZERO's
+ * answer stay visible: a spoken command that scrolls away the moment it is
+ * understood leaves no way to check what was actually heard.
  */
-import { useState } from 'react';
-import type { ConversationState } from '../state/conversation';
+import { useEffect, useRef, useState } from 'react';
+import type { VoiceTurnApi, VoiceTurnState } from '../state/useVoiceTurn';
 
 export interface VoiceBarProps {
-  state: ConversationState;
-  listening: boolean;
-  speechSupported: boolean;
-  transcript: string;
-  answer: string;
-  error: string | null;
-  activeAgents: string[];
-  onToggleListening: () => void;
-  onSubmitText: (text: string) => void;
+  voice: VoiceTurnApi;
+  /** Push-to-talk is the safe default; a tap toggles on touch devices. */
+  onInterrupt: () => void;
 }
 
-const STATE_LABEL: Record<ConversationState, string> = {
-  idle: 'idle',
-  listening: 'listening',
-  processing: 'thinking',
-  agentActive: 'agents working',
-  speaking: 'speaking',
-  error: 'error',
+/** What the operator is told, per state. Short, and never a spinner's worth of nothing. */
+const LABELS: Record<VoiceTurnState, string> = {
+  idle: 'speak',
+  listening: 'LISTENING',
+  transcribing: 'FINALIZING',
+  understanding: 'UNDERSTANDING…',
+  executing: 'EXECUTING',
+  speaking: 'ZERO SPEAKING',
+  error: 'VOICE ERROR',
 };
 
-export function VoiceBar({
-  state,
-  listening,
-  speechSupported,
-  transcript,
-  answer,
-  error,
-  activeAgents,
-  onToggleListening,
-  onSubmitText,
-}: VoiceBarProps): React.JSX.Element {
+export function VoiceBar({ voice, onInterrupt }: VoiceBarProps): React.JSX.Element {
   const [draft, setDraft] = useState('');
+  const holding = useRef(false);
+
+  // Space bar as push-to-talk, but never while typing into the field.
+  useEffect(() => {
+    const isTyping = (target: EventTarget | null): boolean =>
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+
+    const down = (event: KeyboardEvent): void => {
+      if (event.code !== 'Space' || event.repeat || isTyping(event.target)) return;
+      event.preventDefault();
+      holding.current = true;
+      voice.start();
+    };
+    const up = (event: KeyboardEvent): void => {
+      if (event.code !== 'Space' || !holding.current) return;
+      holding.current = false;
+      voice.stop();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, [voice]);
+
+  const listening = voice.state === 'listening';
+  const speaking = voice.state === 'speaking';
 
   return (
-    <div className="voice-bar">
-      <button
-        type="button"
-        className={`mic-button ${listening ? 'mic-listening' : ''}`}
-        onClick={onToggleListening}
-        disabled={!speechSupported}
-        aria-pressed={listening}
-        title={
-          speechSupported
-            ? 'Speak to ZERO'
-            : 'This browser has no SpeechRecognition engine — type instead'
-        }
-      >
-        <span className="mic-dot" aria-hidden="true" />
-        {listening ? 'listening…' : 'speak'}
-      </button>
+    <div className={`voice-bar voice-${voice.state}`}>
+      {/*
+        The transcript panel. Partial text is dimmer and italic because it is
+        still being revised; the final transcript is plain, because it is what
+        ZERO actually received.
+      */}
+      {(voice.partial || voice.finalTranscript || voice.answer) && (
+        <div className="transcript" aria-live="polite">
+          {voice.partial ? (
+            <p className="transcript-partial">
+              <span className="transcript-label">LISTENING</span>
+              <span className="transcript-dot" aria-hidden="true" />
+              <span className="transcript-text">{voice.partial}</span>
+            </p>
+          ) : null}
 
-      <span className={`conversation-state state-${state}`}>ZERO {STATE_LABEL[state]}</span>
+          {voice.finalTranscript && !voice.partial ? (
+            <p className="transcript-final">
+              <span className="transcript-label">HEARD</span>
+              <span className="transcript-text">{voice.finalTranscript}</span>
+            </p>
+          ) : null}
 
-      <form
-        className="voice-input"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const text = draft.trim();
-          if (text.length === 0) return;
-          setDraft('');
-          onSubmitText(text);
-        }}
-      >
-        <input
-          type="text"
-          value={draft}
-          placeholder="…or write to ZERO"
-          onChange={(event) => setDraft(event.target.value)}
-          aria-label="Message to ZERO"
-        />
-      </form>
+          {voice.state === 'understanding' ? (
+            <p className="transcript-status">UNDERSTANDING…</p>
+          ) : null}
 
-      {activeAgents.length > 0 ? (
-        <span className="dim">running: {activeAgents.join(', ')}</span>
-      ) : null}
+          {voice.answer ? (
+            <p className="transcript-answer">
+              <span className="transcript-label">ZERO</span>
+              <span className="transcript-text">{voice.answer}</span>
+            </p>
+          ) : null}
 
-      {transcript ? <span className="transcript">“{transcript}”</span> : null}
-      {answer && state !== 'listening' ? <span className="answer">{answer}</span> : null}
-      {error ? <span className="warn">{error}</span> : null}
+          {voice.awaitingApproval ? (
+            <p className="transcript-gate">
+              AWAITING APPROVAL — nothing has been sent. Approve it in the operator panel.
+            </p>
+          ) : null}
+
+          {/* Never a generic "voice failed": the code and the remedy. */}
+          {voice.error ? (
+            <p className="transcript-error">
+              <span className="transcript-label">{voice.error.code.replace(/_/g, ' ')}</span>
+              <span className="transcript-text">{voice.error.remedy}</span>
+            </p>
+          ) : null}
+        </div>
+      )}
+
+      <div className="voice-controls">
+        <button
+          type="button"
+          className={`speak-button ${listening ? 'speak-listening' : ''}`}
+          // Push-to-talk: held down, released to finalize. Pointer events cover
+          // mouse and touch with one path.
+          onPointerDown={(event) => {
+            event.preventDefault();
+            voice.start();
+          }}
+          onPointerUp={() => voice.stop()}
+          onPointerLeave={() => {
+            if (listening) voice.stop();
+          }}
+          aria-pressed={listening}
+        >
+          <span className="speak-dot" aria-hidden="true" />
+          {LABELS[voice.state]}
+        </button>
+
+        {speaking ? (
+          <button type="button" className="text-button stop-button" onClick={onInterrupt}>
+            stop
+          </button>
+        ) : null}
+
+        <form
+          className="voice-input"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const text = draft.trim();
+            if (!text) return;
+            setDraft('');
+            // The identical pipeline. Typing is not a lesser path.
+            voice.submitText(text);
+          }}
+        >
+          <input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={listening ? 'listening…' : '…or write to ZERO'}
+            aria-label="Write to ZERO"
+            disabled={listening}
+          />
+        </form>
+      </div>
     </div>
   );
 }

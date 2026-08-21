@@ -45,7 +45,7 @@ export interface GatewayHealthBody {
   runtimeConfigured: boolean;
   lanMode: boolean;
   authRequired: boolean;
-  publicPaths: { api: string; ws: string; events: string };
+  publicPaths: { api: string; ws: string; events: string; voice: string };
   diagnostics?: {
     zeroApi: string;
     zeroRuntimeWs: string;
@@ -60,6 +60,7 @@ export declare const DEFAULT_ZERO_RUNTIME_WS: string;
 export declare const PUBLIC_API_BASE: string;
 export declare const PUBLIC_WS_PATH: string;
 export declare const PUBLIC_EVENTS_WS_PATH: string;
+export declare const PUBLIC_VOICE_WS_PATH: string;
 
 export declare function readConfig(env?: Record<string, string | undefined>): GatewayConfig;
 export declare function loadOrCreateToken(tokenFile: string): string;
