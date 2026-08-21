@@ -23,6 +23,82 @@ BRANCH="${ZERO_BRANCH:-$(git -C "$ZERO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/
 OWNER="${ZERO_GITHUB_OWNER:-ChrisTheKey}"
 TOKEN="${GITHUB_TOKEN:-${ZERO_GITHUB_TOKEN:-}}"
 
+# --------------------------------------------------------------------- login
+#
+# GitHub stopped accepting account passwords for git over HTTPS on 2021-08-13,
+# so there is no username-and-password path to offer, however much one would
+# suit a phone. What is left is a token — and `gh auth login` is the way to get
+# one without typing it: you log in with your username and password in a
+# browser, and gh keeps the token.
+#
+# The prompt below is deliberately *visible*. Git's own password prompt hides
+# what you type, a pasted token shows as nothing at all, and the natural
+# response is to assume the paste failed and press enter — which sends an empty
+# password and produces a 403 that blames permissions.
+
+github_login() {
+  [ -n "$TOKEN" ] && return 0
+
+  if command -v gh >/dev/null 2>&1; then
+    if TOKEN="$(gh auth token 2>/dev/null)" && [ -n "$TOKEN" ]; then
+      echo "  using the token gh already holds"
+      return 0
+    fi
+    echo
+    echo "  You are not logged in to GitHub yet."
+    echo "  gh can log you in through the browser — your normal username and"
+    echo "  password, no token to copy."
+    echo
+    printf "  Log in with gh now? [Y/n] "
+    read -r answer
+    case "$answer" in
+      [Nn]*) ;;
+      *)
+        gh auth login --hostname github.com --git-protocol https --web --scopes repo
+        if TOKEN="$(gh auth token 2>/dev/null)" && [ -n "$TOKEN" ]; then
+          echo "  logged in"
+          return 0
+        fi
+        echo "  gh login did not complete" >&2
+        ;;
+    esac
+  else
+    echo
+    echo "  Tip: 'pkg install gh' lets you log in with your username and"
+    echo "       password in a browser instead of pasting a token."
+  fi
+
+  echo
+  echo "  Paste a personal access token (github.com/settings/tokens, scope: repo)."
+  echo "  It is shown as you paste, so you can see that it arrived."
+  printf "  Token (empty to continue without): "
+  read -r TOKEN
+  [ -n "$TOKEN" ] && echo "  received ${#TOKEN} characters"
+  return 0
+}
+
+# Fail on a bad credential here rather than inside a clone, where git reports it
+# as a permission problem and hides the cause.
+verify_token() {
+  [ -z "$TOKEN" ] && return 0
+  local who
+  who="$(node -e '
+    const t = process.argv[1];
+    fetch("https://api.github.com/user", {
+      headers: { authorization: "Bearer " + t, "user-agent": "zero-go" },
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+      .then((u) => console.log(u.login))
+      .catch(() => process.exit(1));
+  ' "$TOKEN" 2>/dev/null)"
+  if [ -n "$who" ]; then
+    echo "  authenticated as $who"
+    return 0
+  fi
+  echo "  the token was rejected by GitHub — check it has the 'repo' scope" >&2
+  return 1
+}
+
 AGENTS=(
   Autonomous-Website-Lead-Scraper Meta-Agent Auto-Agent-Install-Helper
   Google-Bewertungen-AI-Agent Insta-Agent Autonomer-Website-Outreach-Agent
@@ -32,7 +108,7 @@ AGENTS=(
 echo "ZERO — ONE-SHOT START"
 echo "  workspace: $ZERO_WORKSPACE"
 echo "  branch:    $BRANCH"
-echo "  token:     $([ -n "$TOKEN" ] && echo "supplied" || echo "none (public repositories only)")"
+echo "  token:     $([ -n "$TOKEN" ] && echo "supplied" || echo "will ask if needed")"
 echo
 
 # --------------------------------------------------------------------- clone
@@ -56,8 +132,18 @@ clone_missing() {
   output="$(git_auth clone --depth 1 -b "$BRANCH" \
     "https://github.com/$OWNER/$name.git" "$ZERO_WORKSPACE/$name" 2>&1)"
   status=$?
-  if [ "$status" -eq 0 ]; then echo "  $name: cloned"; return 0; fi
+  if [ "$status" -eq 0 ]; then echo "  $name: cloned ($BRANCH)"; return 0; fi
   rm -rf "${ZERO_WORKSPACE:?}/$name"
+
+  # Only the operator, this interface and the lead scraper carry the working
+  # branch; the other agent repositories were never touched by it. Falling back
+  # to their default branch is the correct answer, not a failure.
+  if printf '%s' "$output" | grep -q "Remote branch $BRANCH not found"; then
+    output="$(git_auth clone --depth 1 \
+      "https://github.com/$OWNER/$name.git" "$ZERO_WORKSPACE/$name" 2>&1)"
+    if [ $? -eq 0 ]; then echo "  $name: cloned (default branch)"; return 0; fi
+    rm -rf "${ZERO_WORKSPACE:?}/$name"
+  fi
 
   if printf '%s' "$output" | grep -qE '403|401|Authentication failed|could not read Username'; then
     if [ "$required" = required ]; then
@@ -87,6 +173,24 @@ HINT
 
 mkdir -p "$ZERO_WORKSPACE"
 echo "[1/4] repositories"
+# Credentials are only involved when something actually has to be cloned. On a
+# second run everything is present, so nothing prompts and nothing is verified —
+# a stale token in the environment must not block a workspace that needs no
+# network at all.
+NEEDS_CLONE=""
+for name in HWD-ZERO "${AGENTS[@]}"; do
+  [ -d "$ZERO_WORKSPACE/$name/.git" ] || NEEDS_CLONE=yes
+done
+
+if [ -n "$NEEDS_CLONE" ]; then
+  [ -z "$TOKEN" ] && github_login
+  if [ -n "$TOKEN" ] && ! verify_token; then
+    # A bad token is not fatal on its own: the public repositories still clone,
+    # and the private ones are reported as skipped with a reason.
+    echo "  continuing without it — private repositories will be skipped" >&2
+    TOKEN=""
+  fi
+fi
 clone_missing HWD-ZERO required || exit 1
 for name in "${AGENTS[@]}"; do clone_missing "$name" optional; done
 
