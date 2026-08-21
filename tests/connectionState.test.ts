@@ -7,6 +7,7 @@ const CONNECTED = {
   gateway: 'healthy',
   zeroHttp: 'healthy',
   runtimeSocket: 'connected',
+  runtimeConfigured: true,
   eventStream: 'open',
   runtimeResponded: true,
   operatorResponded: true,
@@ -36,9 +37,9 @@ describe('ZERO connection state machine', () => {
     // state is not READY, and never LOADED.
     expect(resolveZeroStatus({ probed: true, gateway: 'healthy' }).ready).toBe(false);
 
-    // HTTP health alone is never enough. With data already in hand but both
-    // sockets down the honest answer is DEGRADED — the lists are stale and the
-    // brain has stopped moving.
+    // HTTP health alone is never enough. With data already in hand but the
+    // operator stream down, the honest answer is DEGRADED — the lists are
+    // stale and the brain has stopped moving.
     expect(
       resolveZeroStatus({ ...CONNECTED, runtimeSocket: 'disconnected', eventStream: 'closed' })
         .state,
@@ -61,11 +62,30 @@ describe('ZERO connection state machine', () => {
     ).toBe('BACKEND_CONNECTED');
   });
 
-  it('reports DEGRADED when only one of the two streams is up', () => {
+  it('reports DEGRADED when the operator stream is down', () => {
     expect(resolveZeroStatus({ ...CONNECTED, eventStream: 'closed' }).state).toBe('DEGRADED');
-    expect(resolveZeroStatus({ ...CONNECTED, runtimeSocket: 'disconnected' }).state).toBe(
-      'DEGRADED',
-    );
+  });
+
+  it('does not let an optional runtime app-server hold the interface below READY', () => {
+    // A phone running HWD-ZERO under Termux has no codex app-server, and never
+    // will. Waiting on a component this deployment does not run would mean
+    // READY is unreachable no matter how healthy the operator is.
+    const withoutRuntime = {
+      ...CONNECTED,
+      runtimeConfigured: false,
+      runtimeSocket: 'idle',
+      runtimeResponded: false,
+    } as const;
+    expect(resolveZeroStatus(withoutRuntime).state).toBe('READY');
+    expect(resolveZeroStatus(withoutRuntime).ready).toBe(true);
+  });
+
+  it('does report a runtime that is configured and not connected', () => {
+    // Configured and down is a real loss — the graph and the voice go with it.
+    const status = resolveZeroStatus({ ...CONNECTED, runtimeSocket: 'disconnected' });
+    expect(status.state).toBe('DEGRADED');
+    expect(status.detail).toContain('runtime app-server');
+    expect(status.ready).toBe(false);
   });
 
   it('distinguishes a dead gateway from an offline backend', () => {

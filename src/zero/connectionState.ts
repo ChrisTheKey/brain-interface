@@ -50,6 +50,15 @@ export interface ZeroStatusInput {
   zeroHttp: ProbeResult;
   /** ZERO runtime socket, through `/ws`. */
   runtimeSocket: SocketState;
+  /**
+   * Is a codex runtime app-server configured at all?
+   *
+   * It drives the brain graph and realtime voice, and it is genuinely
+   * optional — a phone running HWD-ZERO under Termux has no reason to run one.
+   * When it is absent, its socket must not hold the interface below READY;
+   * when it is configured and down, that is a real degradation.
+   */
+  runtimeConfigured: boolean;
   /** Operator event stream, through `/ws/events`. */
   eventStream: StreamState;
   /** True once ZERO's runtime returned a real snapshot. */
@@ -80,6 +89,7 @@ export const ZERO_STATUS_DEFAULTS: ZeroStatusInput = {
   authRequired: false,
   zeroHttp: 'unknown',
   runtimeSocket: 'idle',
+  runtimeConfigured: false,
   eventStream: 'connecting',
   runtimeResponded: false,
   operatorResponded: false,
@@ -87,12 +97,22 @@ export const ZERO_STATUS_DEFAULTS: ZeroStatusInput = {
   error: '',
 };
 
-function socketOpen(input: ZeroStatusInput): boolean {
-  return input.runtimeSocket === 'connected' || input.eventStream === 'open';
+/**
+ * The stream that matters.
+ *
+ * HWD-ZERO's operator events are what make the brain move; the codex runtime
+ * socket is a second, optional source. READY therefore turns on the operator
+ * stream, not on both — otherwise a deployment that never runs a codex
+ * app-server (every phone) could never reach READY no matter how healthy the
+ * operator is.
+ */
+function operatorStreamOpen(input: ZeroStatusInput): boolean {
+  return input.eventStream === 'open';
 }
 
-function socketFullyOpen(input: ZeroStatusInput): boolean {
-  return input.runtimeSocket === 'connected' && input.eventStream === 'open';
+/** A configured runtime that is not connected — a real, reportable degradation. */
+function runtimeMissing(input: ZeroStatusInput): boolean {
+  return input.runtimeConfigured && input.runtimeSocket !== 'connected';
 }
 
 function backendResponded(input: ZeroStatusInput): boolean {
@@ -171,31 +191,42 @@ export function resolveZeroStatus(partial: Partial<ZeroStatusInput> = {}): ZeroS
     };
   }
 
-  if (socketFullyOpen(input) && backendResponded(input)) {
+  if (operatorStreamOpen(input) && backendResponded(input)) {
+    // A configured runtime that is down still costs the graph and the voice,
+    // so it is named — but it does not turn a working operator into a failure.
+    if (runtimeMissing(input)) {
+      return {
+        state: 'DEGRADED',
+        headline: 'DEGRADED',
+        detail: 'HWD-ZERO is READY. The ZERO runtime app-server is configured but not connected.',
+        ready: false,
+        retryable: true,
+      };
+    }
     return {
       state: 'READY',
       headline: 'READY',
-      detail: 'HTTP health, event stream and the ZERO runtime all answered.',
+      detail: 'HTTP health, the operator event stream and HWD-ZERO itself all answered.',
       ready: true,
       retryable: false,
     };
   }
 
-  if (socketFullyOpen(input)) {
+  if (operatorStreamOpen(input)) {
     return {
       state: 'BACKEND_CONNECTED',
       headline: 'BACKEND CONNECTED',
-      detail: 'Connected through /ws — waiting for the first real answer from ZERO.',
+      detail: 'Connected through /ws/events — waiting for the first real answer from ZERO.',
       ready: false,
       retryable: false,
     };
   }
 
-  if (socketOpen(input) || backendResponded(input)) {
+  if (backendResponded(input) || input.runtimeSocket === 'connected') {
     return {
       state: 'DEGRADED',
       headline: 'DEGRADED',
-      detail: 'HWD-ZERO answers over HTTP, but the same-origin event stream is not fully up.',
+      detail: 'HWD-ZERO answers over HTTP, but the same-origin event stream is down.',
       ready: false,
       retryable: true,
     };

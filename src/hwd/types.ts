@@ -132,8 +132,14 @@ export interface GatewayHealth {
   gateway: 'healthy';
   /** HWD-ZERO's HTTP API, probed by the gateway on loopback. */
   zero: 'healthy' | 'offline';
-  /** ZERO's runtime WebSocket upstream, probed by the gateway on loopback. */
-  websocket: 'healthy' | 'offline';
+  /**
+   * The optional codex runtime app-server, probed by the gateway on loopback.
+   * `not_configured` means the deployment does not run one — which is normal
+   * on a phone, and is not a degradation.
+   */
+  websocket: 'healthy' | 'offline' | 'not_configured';
+  /** Whether a runtime app-server is configured at all. */
+  runtimeConfigured: boolean;
   lanMode: boolean;
   /** True when this origin demands a pairing token the client may not hold. */
   authRequired: boolean;

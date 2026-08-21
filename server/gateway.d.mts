@@ -6,7 +6,10 @@ export interface GatewayConfig {
   lanMode: boolean;
   /** HWD-ZERO's HTTP API on loopback. */
   zeroApi: string;
-  /** ZERO's runtime WebSocket on loopback — a different port, so a separate value. */
+  /**
+   * ZERO's runtime WebSocket on loopback — a different port, so a separate
+   * value. May be empty: the codex app-server is optional.
+   */
   zeroRuntimeWs: string;
   distDir: string;
   tokenFile: string;
@@ -14,6 +17,8 @@ export interface GatewayConfig {
   /** Expose internal upstream addresses in the health payload. */
   diagnostics: boolean;
   healthTimeoutMs: number;
+  /** Suppress the startup banner and per-listener notes. */
+  quiet: boolean;
 }
 
 export interface NetworkInterfaceEntry {
@@ -36,7 +41,8 @@ export interface WsRoute {
 export interface GatewayHealthBody {
   gateway: 'healthy';
   zero: 'healthy' | 'offline';
-  websocket: 'healthy' | 'offline';
+  websocket: 'healthy' | 'offline' | 'not_configured';
+  runtimeConfigured: boolean;
   lanMode: boolean;
   authRequired: boolean;
   publicPaths: { api: string; ws: string; events: string };
@@ -70,6 +76,7 @@ export declare function createRateLimiter(
   now?: () => number,
 ): (key: string) => boolean;
 export declare function resolveStaticPath(distDir: string, urlPath: string): string | null;
+export declare function bindAddresses(config: Pick<GatewayConfig, 'lanMode'>): string[];
 export declare function resolveWsRoute(pathname: string, config: GatewayConfig): WsRoute | null;
 export declare function upstreamAddress(target: string): {
   hostname: string;

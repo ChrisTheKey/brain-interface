@@ -5,15 +5,19 @@
 #   scripts/zero-go.sh            laptop only    → http://127.0.0.1:3000
 #   scripts/zero-go.sh --lan      laptop + phone → http://<detected LAN IP>:3000
 #
-# Order matters, and it is the order below: the environment, then HWD-ZERO,
-# then HWD-ZERO's health, then the gateway, then the interface, then the
-# gateway's own health, then the socket. `READY` is printed at the end only
-# when every one of those actually passed — a started process is not a healthy
-# one, and this script never claims otherwise.
+# On Android use `scripts/start-zero-termux.sh`, which is the same idea with
+# Termux's constraints built in (no init system, detachable, wake lock).
 #
-# If HWD-ZERO does not come up the interface still starts, and says
-# BACKEND OFFLINE. That is deliberate: a visible, correct offline state beats a
-# blank page every time.
+# THE GATEWAY COMES FIRST. Earlier this script built the interface and checked
+# HWD-ZERO *before* starting the gateway, so a failed build or an absent
+# backend meant no web server at all — the browser got ERR_CONNECTION_REFUSED
+# and the interface could not even report what was wrong. The order is now:
+# environment, ports, bundle, GATEWAY, prove port 3000 answers, and only then
+# HWD-ZERO. Everything after the gateway is advisory.
+#
+# `READY` is printed only when the health probe genuinely came back healthy —
+# a started process is not a healthy one, and this script never claims
+# otherwise.
 # ---------------------------------------------------------------------------
 source "$(dirname "${BASH_SOURCE[0]}")/lib-zero.sh"
 cd "$ZERO_ROOT"
@@ -79,57 +83,27 @@ if zero_port_busy "$ZERO_UI_PORT"; then
 fi
 ok "port $ZERO_UI_PORT free"
 
-# --- 4. HWD-ZERO -----------------------------------------------------------
+# --- 4. interface bundle ----------------------------------------------------
 echo
-echo "4 · HWD-ZERO"
-ZERO_STARTED_HERE=false
-if zero_http_ok "$ZERO_API_URL/api/health"; then
-  ok "HTTP API already up"
-elif [ "$RUNTIME_PRESENT" = true ] && [ -n "${ZERO_START_CMD:-}" ]; then
-  # Only ever the command the operator configured. This script does not invent
-  # a way to start HWD-ZERO, and it does not start a second runtime of its own.
-  warn "starting HWD-ZERO with ZERO_START_CMD"
-  ( cd "$ZERO_RUNTIME_DIR" && eval "$ZERO_START_CMD" ) &
-  echo $! > "$ZERO_PID_DIR/hwd-zero.pid"
-  ZERO_STARTED_HERE=true
-  sleep 2
-else
-  bad "HTTP API not answering at $ZERO_API_URL"
-  echo "      set ZERO_START_CMD to the command that serves HWD-ZERO's API,"
-  echo "      or start it yourself. The interface will show BACKEND OFFLINE."
-fi
-
-# --- 5. HWD-ZERO health ----------------------------------------------------
-echo
-echo "5 · HWD-ZERO HEALTH"
-ZERO_HEALTHY=false
-if zero_wait_http "$ZERO_API_URL/api/health" 10; then
-  ZERO_HEALTHY=true
-  ok "HTTP health at $ZERO_API_URL/api/health"
-else
-  bad "no HTTP health — the interface will report BACKEND OFFLINE"
-fi
-
-RUNTIME_SOCKET=false
-if zero_socket_open "$ZERO_RUNTIME_WS_URL"; then
-  RUNTIME_SOCKET=true
-  ok "runtime socket accepting at $ZERO_RUNTIME_WS_URL"
-else
-  warn "runtime socket not accepting at $ZERO_RUNTIME_WS_URL"
-fi
-
-# --- 6. interface build ----------------------------------------------------
-echo
-echo "6 · INTERFACE"
-if [ ! -d dist ] || [ -n "$(find src index.html -newer dist 2>/dev/null | head -1)" ]; then
+echo "4 · INTERFACE BUNDLE"
+if [ ! -f dist/index.html ] || [ -n "$(find src index.html -newer dist/index.html 2>/dev/null | head -1)" ]; then
   warn "building the interface"
-  npm run build
+  if npm run build; then
+    ok "built"
+  elif [ -f dist/index.html ]; then
+    # A stale interface that loads beats a fresh one that does not exist.
+    warn "build failed — serving the previous bundle"
+  else
+    bad "build failed and there is no previous bundle to serve"
+    exit 1
+  fi
+else
+  ok "dist is current"
 fi
-ok "dist present"
 
-# --- 7. gateway ------------------------------------------------------------
+# --- 5. gateway ------------------------------------------------------------
 echo
-echo "7 · GATEWAY"
+echo "5 · GATEWAY"
 ZERO_LAN_MODE="$LAN_MODE" \
 ZERO_UI_PORT="$ZERO_UI_PORT" \
 ZERO_API_URL="$ZERO_API_URL" \
@@ -138,12 +112,58 @@ ZERO_RUNTIME_WS_URL="$ZERO_RUNTIME_WS_URL" \
 GATEWAY_PID=$!
 echo "$GATEWAY_PID" > "$ZERO_PID_DIR/gateway.pid"
 
-if zero_wait_http "http://127.0.0.1:$ZERO_UI_PORT/api/health" 20; then
+# "Is the gateway serving?" — not "is the whole chain healthy?". `/api/health`
+# answers 503 precisely when the gateway is fine and HWD-ZERO is not, and
+# treating that as failure is what used to kill a perfectly good gateway.
+if zero_wait_http "http://127.0.0.1:$ZERO_UI_PORT/" 20 &&
+   zero_wait_http "http://127.0.0.1:$ZERO_UI_PORT/api/health" 20; then
   ok "gateway answering on port $ZERO_UI_PORT"
 else
-  bad "gateway did not answer on port $ZERO_UI_PORT"
+  bad "ZERO GATEWAY FAILED — port $ZERO_UI_PORT did not answer"
   kill "$GATEWAY_PID" 2>/dev/null || true
+  rm -f "$ZERO_PID_DIR/gateway.pid"
   exit 1
+fi
+
+# --- 6. HWD-ZERO (advisory from here) -----------------------------------------------------------
+echo
+echo "6 · HWD-ZERO"
+# Nothing below this line may exit non-zero: the gateway is already serving,
+# and the backend's state is something to report, not something to fail on.
+ZERO_STARTED_HERE=false
+if zero_http_ok "$ZERO_API_URL/api/health"; then
+  ok "HTTP API already up"
+elif [ "$RUNTIME_PRESENT" = true ]; then
+  # HWD-ZERO's own serving layer, unless the operator configured another way.
+  START_CMD="${ZERO_START_CMD:-python3 -m zero.server --host 127.0.0.1 --port $(zero_url_port "$ZERO_API_URL") --quiet}"
+  warn "starting: $START_CMD"
+  ( cd "$ZERO_RUNTIME_DIR" && eval "$START_CMD" >>"$ZERO_LOG_DIR/hwd-zero.log" 2>&1 ) &
+  echo $! > "$ZERO_PID_DIR/hwd-zero.pid"
+  ZERO_STARTED_HERE=true
+  sleep 2
+else
+  warn "HTTP API not answering at $ZERO_API_URL"
+  echo "      start it with:  cd \"$ZERO_RUNTIME_DIR\" && python -m zero.server"
+  echo "      or set ZERO_START_CMD. The interface stays up and shows BACKEND OFFLINE."
+fi
+
+# --- 7. HWD-ZERO health ----------------------------------------------------
+echo
+echo "7 · HWD-ZERO HEALTH"
+ZERO_HEALTHY=false
+if zero_wait_http "$ZERO_API_URL/api/health" 10; then
+  ZERO_HEALTHY=true
+  ok "HTTP health at $ZERO_API_URL/api/health"
+else
+  warn "no HTTP health — the interface stays up and reports BACKEND OFFLINE"
+fi
+
+if [ -z "$ZERO_RUNTIME_WS_URL" ]; then
+  ok "no runtime app-server configured (optional)"
+elif zero_socket_open "$ZERO_RUNTIME_WS_URL"; then
+  ok "runtime socket accepting at $ZERO_RUNTIME_WS_URL"
+else
+  warn "runtime socket not accepting at $ZERO_RUNTIME_WS_URL (optional component)"
 fi
 
 # --- 8. end-to-end health --------------------------------------------------
@@ -155,12 +175,19 @@ ZS="$(zero_health_field "$HEALTH_URL" zero)"
 WS="$(zero_health_field "$HEALTH_URL" websocket)"
 [ "$GW" = "healthy" ] && ok "gateway   healthy" || bad "gateway   ${GW:-unknown}"
 [ "$ZS" = "healthy" ] && ok "hwd-zero  healthy" || bad "hwd-zero  ${ZS:-offline}"
-[ "$WS" = "healthy" ] && ok "websocket healthy" || bad "websocket ${WS:-offline}"
+# `not_configured` is not a failure: the codex runtime app-server is optional
+# and most deployments (every phone) do not run one.
+case "$WS" in
+  healthy)        ok   "runtime   healthy" ;;
+  not_configured) ok   "runtime   not configured (optional)" ;;
+  *)              warn "runtime   offline at $ZERO_RUNTIME_WS_URL" ;;
+esac
 
 # --- 9. the URLs -----------------------------------------------------------
 LAN_IP="$(zero_lan_ip || true)"
 echo
-if [ "$ZS" = "healthy" ] && [ "$WS" = "healthy" ]; then
+# READY turns on HWD-ZERO, not on the optional runtime app-server.
+if [ "$ZS" = "healthy" ]; then
   echo "ZERO READY"
 else
   # Never "ready" because a process started. READY means the chain answered.

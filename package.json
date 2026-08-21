@@ -14,7 +14,11 @@
     "typecheck": "tsc -b --force",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "start": "bash scripts/start-zero-termux.sh",
+    "start:background": "bash scripts/start-zero-termux.sh --background",
+    "start:lan": "bash scripts/start-zero-termux.sh --lan",
+    "stop": "bash scripts/start-zero-termux.sh --stop"
   },
   "dependencies": {
     "react": "^19.2.0",

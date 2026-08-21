@@ -97,6 +97,9 @@ export function readConfig(env = process.env) {
     host: lanMode ? '0.0.0.0' : '127.0.0.1',
     lanMode,
     zeroApi: env.ZERO_API_URL ?? DEFAULT_ZERO_API,
+    // May be empty: the codex app-server is a *separate*, optional component
+    // that drives the brain graph and realtime voice. HWD-ZERO's own operator
+    // stream lives on ZERO_API_URL and is what the interface actually needs.
     zeroRuntimeWs: env.ZERO_RUNTIME_WS_URL ?? DEFAULT_ZERO_RUNTIME_WS,
     distDir: env.ZERO_UI_DIST ?? join(projectRoot, 'dist'),
     tokenFile: env.ZERO_TOKEN_FILE ?? join(projectRoot, '.zero', 'gateway-token'),
@@ -110,6 +113,7 @@ export function readConfig(env = process.env) {
         ? !lanMode
         : String(diagnosticsRaw).toLowerCase() === 'true',
     healthTimeoutMs: Number(env.ZERO_HEALTH_TIMEOUT_MS ?? 2_000),
+    quiet: String(env.ZERO_QUIET ?? '').toLowerCase() === 'true',
   };
 }
 
@@ -175,6 +179,23 @@ export function createRateLimiter(limitPerMinute, now = () => Date.now()) {
     bucket.count += 1;
     return bucket.count <= limitPerMinute;
   };
+}
+
+/**
+ * Every address the gateway should listen on.
+ *
+ * Two, not one, and that is the fix for a real symptom: on Android `localhost`
+ * commonly resolves to `::1` before `127.0.0.1`, so a gateway bound only to
+ * the IPv4 loopback answers `http://127.0.0.1:3000` and refuses
+ * `http://localhost:3000` from the same phone. Binding both loopback families
+ * makes the two spellings equivalent, which is what a user reasonably expects.
+ *
+ * The first entry is the primary: if it cannot bind, the gateway has failed.
+ * The rest are best effort — a host without IPv6 simply skips `::1` rather
+ * than refusing to start.
+ */
+export function bindAddresses(config) {
+  return config.lanMode ? ['0.0.0.0', '::'] : ['127.0.0.1', '::1'];
 }
 
 /** Resolves a URL path inside dist, refusing anything that escapes it. */
@@ -386,15 +407,22 @@ export function probeSocket(target, timeoutMs = 2_000) {
  * interface needs all three to decide whether it may say READY.
  */
 export async function collectHealth(config, extra = {}) {
+  const runtimeConfigured = Boolean(config.zeroRuntimeWs);
   const [zero, websocket] = await Promise.all([
     probeHttp(config.zeroApi, '/api/health', config.healthTimeoutMs),
-    probeSocket(config.zeroRuntimeWs, config.healthTimeoutMs),
+    runtimeConfigured
+      ? probeSocket(config.zeroRuntimeWs, config.healthTimeoutMs)
+      : Promise.resolve({ ok: false, detail: 'not configured' }),
   ]);
 
   const body = {
     gateway: 'healthy',
     zero: zero.ok ? 'healthy' : 'offline',
-    websocket: websocket.ok ? 'healthy' : 'offline',
+    // Three values, not two: an optional component that is simply absent is
+    // not the same fact as one that is configured and down, and only the
+    // second is a degradation.
+    websocket: !runtimeConfigured ? 'not_configured' : websocket.ok ? 'healthy' : 'offline',
+    runtimeConfigured,
     lanMode: config.lanMode,
     authRequired: config.lanMode,
     publicPaths: {
@@ -432,7 +460,7 @@ export function startGateway(config = readConfig()) {
     return provided !== null && constantTimeEquals(provided, token);
   };
 
-  const server = createServer((req, res) => {
+  const handleRequest = (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const remote = req.socket.remoteAddress ?? 'unknown';
 
@@ -505,9 +533,9 @@ export function startGateway(config = readConfig()) {
       error: 'ui_not_built',
       message: 'Run `npm run build` first — the gateway serves the built interface.',
     });
-  });
+  };
 
-  server.on('upgrade', (req, socket, head) => {
+  const handleUpgrade = (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const route = resolveWsRoute(url.pathname, config);
     if (!route) {
@@ -524,17 +552,55 @@ export function startGateway(config = readConfig()) {
     // a plain upgrade from loopback.
     const search = url.search.replace(/([?&])token=[^&]*&?/, '$1').replace(/[?&]$/, '');
     proxyUpgrade(req, socket, head, route.target, route.path, search);
+  };
+
+  const server = createServer(handleRequest);
+  server.on('upgrade', handleUpgrade);
+
+  // A proxy error must never take the gateway down. `proxyHttp` and
+  // `proxyUpgrade` already handle their own sockets, but an error emitted on a
+  // client socket that has no listener would otherwise reach the process.
+  server.on('clientError', (_error, socket) => {
+    if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n');
+    socket.destroy();
   });
 
-  server.listen(config.port, config.host, () => {
+  const [primaryAddress, ...alsoBind] = bindAddresses(config);
+  const secondary = [];
+
+  server.listen(config.port, primaryAddress, () => {
+    // The extra loopback family binds to the port the primary actually got,
+    // which matters when the port is 0 (tests) — otherwise the two listeners
+    // would land on different ports.
+    const port = server.address()?.port ?? config.port;
+    for (const address of alsoBind) {
+      const extra = createServer(handleRequest);
+      extra.on('upgrade', handleUpgrade);
+      extra.on('clientError', (_error, socket) => socket.destroy());
+      // Best effort: a host without IPv6 skips this and the gateway stays up.
+      extra.on('error', (error) => {
+        if (!config.quiet) {
+          process.stdout.write(`NOTE:     ${address} not bound (${error.code ?? error.message})\n`);
+        }
+      });
+      try {
+        extra.listen(port, address);
+        secondary.push(extra);
+      } catch {
+        /* same as the error handler: an unavailable family is not fatal */
+      }
+    }
+
+    if (config.quiet) return;
     const lan = detectLanAddress();
     process.stdout.write('\nZERO GATEWAY ONLINE\n\n');
-    process.stdout.write(`LOCAL:    http://127.0.0.1:${config.port}\n`);
+    process.stdout.write(`LOCAL:    http://127.0.0.1:${port}\n`);
+    process.stdout.write(`          http://localhost:${port}\n`);
     if (config.lanMode) {
       process.stdout.write(
         lan
-          ? `LAN:      http://${lan}:${config.port}/?token=${token}\n`
-          : 'LAN:      no LAN address detected — is the laptop connected to a network?\n',
+          ? `LAN:      http://${lan}:${port}/?token=${token}\n`
+          : 'LAN:      no LAN address detected — is the device connected to a network?\n',
       );
     } else {
       process.stdout.write('LAN:      disabled (start with ZERO_LAN_MODE=true)\n');
@@ -545,6 +611,14 @@ export function startGateway(config = readConfig()) {
     );
     process.stdout.write(`TOKEN:    ${config.tokenFile}\n\n`);
   });
+
+  // Closing the handle closes every listener it opened.
+  const closePrimary = server.close.bind(server);
+  server.close = (callback) => {
+    for (const extra of secondary) extra.close();
+    return closePrimary(callback);
+  };
+  server.boundAddresses = () => [server, ...secondary].map((s) => s.address()).filter(Boolean);
 
   return server;
 }

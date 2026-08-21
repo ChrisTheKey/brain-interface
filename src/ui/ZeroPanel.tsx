@@ -79,6 +79,18 @@ export function ZeroPanel({
           }
           tone={streamTone}
         />
+        {/*
+          Only shown when a runtime app-server is actually configured. A row
+          reading "OFFLINE" for a component this deployment never runs is a
+          false alarm, and a phone is exactly such a deployment.
+        */}
+        {health?.runtimeConfigured ? (
+          <Row
+            label="ZERO RUNTIME"
+            value={health.websocket === 'healthy' ? 'CONNECTED' : 'OFFLINE'}
+            tone={health.websocket === 'healthy' ? 'ok' : 'warn'}
+          />
+        ) : null}
         <Row
           label="AGENTS"
           value={agentCount === null ? 'UNKNOWN' : `${agentCount} REGISTERED`}

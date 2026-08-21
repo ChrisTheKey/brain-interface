@@ -146,7 +146,7 @@ laptop, over the LAN and behind HTTPS without a change. See
 | --- | --- | --- |
 | `ZERO_UI_PORT` | `3000` | The single port a browser needs |
 | `ZERO_API_URL` | `http://127.0.0.1:8000` | HWD-ZERO's HTTP API, loopback only |
-| `ZERO_RUNTIME_WS_URL` | `ws://127.0.0.1:8787` | ZERO runtime app-server, loopback only |
+| `ZERO_RUNTIME_WS_URL` | `ws://127.0.0.1:8787` | Optional codex app-server, loopback only; empty = none |
 | `ZERO_LAN_MODE` | `false` | Bind the gateway (only the gateway) to `0.0.0.0` |
 | `ZERO_DIAGNOSTICS` | on locally, off on LAN | Include internal upstreams in `/api/health` |
 | `ZERO_START_CMD` | – | Command `zero-go.sh` uses to start HWD-ZERO |
@@ -205,6 +205,13 @@ The gateway is the single origin — port 3000 serves the interface, `/api` and
 `/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
 
 ```bash
+# Android / Termux — one command, and the interface stays up regardless
+bash scripts/start-zero-termux.sh              # foreground
+bash scripts/start-zero-termux.sh --background # detached, survives the session
+bash scripts/start-zero-termux.sh --lan        # also reachable from the LAN
+bash scripts/start-zero-termux.sh --stop       # stops only what it started
+
+# Laptop
 scripts/zero-go.sh           # the one command  → http://127.0.0.1:3000
 scripts/zero-go.sh --lan     # laptop + phone   → prints the detected LAN URL
 
@@ -215,11 +222,24 @@ scripts/status-zero.sh       # what is actually up
 scripts/stop-zero.sh
 ```
 
-`zero-go.sh` is the canonical start: environment → repositories → ports →
-HWD-ZERO → HWD-ZERO health → interface build → gateway → health through the
-gateway → the URLs, in that order, printing what each step actually found. It
-says `ZERO READY` only when the health probe genuinely came back healthy, and
-`ZERO ONLINE · BACKEND OFFLINE` otherwise. It never prints the token.
+**The gateway starts before the backend, and nothing about the backend can
+stop it.** Order: environment → ports → bundle → **gateway** → prove port 3000
+answers → HWD-ZERO → health. Everything after the gateway is advisory: a
+missing, broken or slow HWD-ZERO changes what is *reported*, never whether the
+interface is served. A backend that is not running is a state to display.
+
+Both scripts say `ZERO READY` only when the health probe genuinely came back
+healthy, and `ZERO ONLINE · BACKEND OFFLINE` otherwise. Neither prints the
+token. If port 3000 does not answer they say `ZERO GATEWAY FAILED` and print
+the log path rather than claiming success.
+
+```
+.zero/run/gateway.pid     .zero/logs/gateway.log
+.zero/run/hwd-zero.pid    .zero/logs/hwd-zero.log
+```
+
+Stopping goes through those pid files only — never `pkill node` or
+`killall python`, which on a phone take out whatever else is running.
 
 `start-zero-lan.sh` checks RAM, port and HWD-ZERO reachability, then prints the
 **detected** LAN address — never an example IP. The phone opens that URL with
@@ -261,13 +281,17 @@ automatically opens `wss://`.
 
 ### 1. Start the ZERO backend
 
-Two upstreams, both on loopback, both configured in one place each:
+Two upstreams, both on loopback, both configured in one place each. The first
+is required for `READY`; the second is optional.
 
 ```bash
 # HWD-ZERO's HTTP API + operator event stream  → ZERO_API_URL
-# (see docs/ZERO_SAME_ORIGIN_GATEWAY.md for the contract it must expose)
+cd ../HWD-ZERO && python -m zero.server
 
-# ZERO's runtime app-server                    → ZERO_RUNTIME_WS_URL
+# ZERO's runtime app-server (OPTIONAL)         → ZERO_RUNTIME_WS_URL
+# Drives the brain graph and realtime voice. Leave ZERO_RUNTIME_WS_URL empty
+# when you do not run one — a phone never will, and its absence is reported as
+# "not configured" rather than as a failure.
 cd ../Codex/codex-rs
 cargo build --release -p codex-app-server --bin codex-app-server
 ./target/release/codex-app-server --listen ws://127.0.0.1:8787

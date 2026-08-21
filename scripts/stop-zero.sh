@@ -10,6 +10,14 @@ stop_pid_file() {
   fi
   local pid
   pid="$(cat "$file")"
+  case "$pid" in
+    ''|*[!0-9]*)
+      # A pid file that does not hold a number is corrupt, not a target.
+      echo "$name pid file was unreadable — removed, nothing killed"
+      rm -f "$file"
+      return
+      ;;
+  esac
   if kill -0 "$pid" 2>/dev/null; then
     kill "$pid"
     echo "$name stopped (pid $pid)"
@@ -19,7 +27,11 @@ stop_pid_file() {
   rm -f "$file"
 }
 
+# Only ever what a pid file names. No `pkill node`, no `killall python`: on a
+# phone those take out whatever else the user happens to be running.
 stop_pid_file gateway gateway.pid
 # Only a runtime *these scripts* started; an HWD-ZERO you run yourself is never
 # touched.
-[ -f "$ZERO_PID_DIR/hwd-zero.pid" ] && stop_pid_file hwd-zero hwd-zero.pid
+if [ -f "$ZERO_PID_DIR/hwd-zero.pid" ]; then
+  stop_pid_file hwd-zero hwd-zero.pid
+fi

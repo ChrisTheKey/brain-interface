@@ -17,7 +17,10 @@ ZERO_UI_PORT="${ZERO_UI_PORT:-3000}"
 # not guess: `scripts/zero-go.sh` prints what it actually found.
 # ---------------------------------------------------------------------------
 ZERO_API_URL="${ZERO_API_URL:-http://127.0.0.1:8000}"
-ZERO_RUNTIME_WS_URL="${ZERO_RUNTIME_WS_URL:-ws://127.0.0.1:8787}"
+# `${VAR-default}` rather than `${VAR:-default}`: an explicitly empty value
+# means "this deployment runs no codex app-server", which is normal on a phone
+# and must not be quietly replaced by the default.
+ZERO_RUNTIME_WS_URL="${ZERO_RUNTIME_WS_URL-ws://127.0.0.1:8787}"
 
 # Where HWD-ZERO is checked out, if it is a sibling of this repository.
 # Checked out names differ across machines (HWD-ZERO, hwd-zero, HWD_ZERO), so
@@ -37,8 +40,12 @@ zero_find_runtime_dir() {
 }
 ZERO_RUNTIME_DIR="${ZERO_RUNTIME_DIR:-$(zero_find_runtime_dir || true)}"
 
-ZERO_PID_DIR="$ZERO_ROOT/.zero"
-mkdir -p "$ZERO_PID_DIR"
+# Run state and logs. Separate directories so a stale pid file is obvious and
+# a log can be tailed without stumbling over the token.
+ZERO_STATE_DIR="$ZERO_ROOT/.zero"
+ZERO_PID_DIR="$ZERO_STATE_DIR/run"
+ZERO_LOG_DIR="$ZERO_STATE_DIR/logs"
+mkdir -p "$ZERO_PID_DIR" "$ZERO_LOG_DIR"
 
 # Load .env.local without exporting anything that is not a plain KEY=value.
 zero_load_env() {
@@ -101,6 +108,16 @@ zero_port_busy() {
   ' "$1"
 }
 
+# The port of an http(s):// or ws(s):// URL, with the scheme's default when
+# none is written. Parsed, never assumed.
+zero_url_port() {
+  node -e '
+    const url = new URL(process.argv[1]);
+    const secure = url.protocol === "wss:" || url.protocol === "https:";
+    process.stdout.write(String(url.port || (secure ? 443 : 80)));
+  ' "$1"
+}
+
 # Is anything accepting TCP at this ws:// or http:// URL?
 zero_socket_open() {
   node -e '
@@ -115,13 +132,59 @@ zero_socket_open() {
   ' "$1"
 }
 
+# Did anything answer at all?
+#
+# *Any* HTTP status counts as an answer, including 503. That is not laxity:
+# the gateway answers `/api/health` with 503 precisely when it is healthy and
+# HWD-ZERO is not, so treating 503 as "dead" made the start script conclude the
+# gateway had failed and kill it — the exact reason port 3000 disappeared.
+# "Is this process serving?" and "is the whole chain healthy?" are different
+# questions; this helper answers only the first.
 zero_http_ok() {
   node -e '
     const http = require("http");
-    const req = http.get(process.argv[1], (res) => { process.exit(res.statusCode && res.statusCode < 500 ? 0 : 1); });
+    const req = http.get(process.argv[1], (res) => { res.resume(); process.exit(res.statusCode ? 0 : 1); });
     req.on("error", () => process.exit(1));
-    req.setTimeout(2000, () => { req.destroy(); process.exit(1); });
-  ' "$1"
+    req.setTimeout(Number(process.argv[2] || 2000), () => { req.destroy(); process.exit(1); });
+  ' "$1" "${2:-2000}"
+}
+
+# Is a pid file pointing at a process that is actually alive?
+# Prints the pid when it is, nothing when it is not.
+zero_live_pid() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  local pid
+  pid="$(cat "$file" 2>/dev/null || true)"
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  echo "$pid"
+}
+
+# Remove a pid file whose process is gone. A stale file must never be mistaken
+# for a running service, and must never cause a kill of whatever recycled
+# that pid in the meantime.
+zero_clear_stale_pid() {
+  local file="$1"
+  if [ -f "$file" ] && ! zero_live_pid "$file" >/dev/null; then
+    rm -f "$file"
+    return 0
+  fi
+  return 1
+}
+
+# The last lines of a log, for when something failed and the reason matters.
+zero_tail_log() {
+  local file="$1" lines="${2:-25}"
+  if [ -s "$file" ]; then
+    echo "--- ${file#"$ZERO_ROOT"/} (last $lines lines) ---"
+    tail -n "$lines" "$file"
+    echo "--- end of log ---"
+  else
+    echo "(no output in ${file#"$ZERO_ROOT"/})"
+  fi
 }
 
 # Reads one field out of the gateway's composite health payload.

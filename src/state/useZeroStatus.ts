@@ -116,6 +116,9 @@ export function useZeroStatus(sources: ZeroStatusSources): ZeroStatusView {
         authRequired: health?.authRequired ?? false,
         zeroHttp: health ? (health.zero === 'healthy' ? 'healthy' : 'offline') : 'unknown',
         runtimeSocket: sources.runtimeSocket,
+        // The gateway is the only thing that knows whether a runtime
+        // app-server exists at all; the browser must not assume one.
+        runtimeConfigured: health?.runtimeConfigured ?? false,
         eventStream: sources.eventStream,
         runtimeResponded: sources.runtimeResponded,
         operatorResponded: sources.operatorResponded,

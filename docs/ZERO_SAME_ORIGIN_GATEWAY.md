@@ -71,9 +71,50 @@ remove.
 (`resolveWsRoute`) rather than by prefix — otherwise every operator event would
 be piped into the runtime port.
 
+## Termux, and why port 3000 used to disappear
+
+`http://localhost:3000` returning `ERR_CONNECTION_REFUSED` on the phone had
+two causes, both in the start path rather than in the gateway:
+
+1. **The backend was a precondition for the web server.** `zero-go.sh` built
+   the bundle and probed HWD-ZERO *before* starting the gateway, under
+   `set -e`. A failed build on Android — a native module, an OOM kill — or an
+   absent backend meant the script exited and the gateway was never started.
+2. **The readiness probe read a correct answer as a failure.** `/api/health`
+   answers **503** exactly when the gateway is healthy and HWD-ZERO is not.
+   The probe accepted only `< 500`, so it concluded the gateway had failed and
+   ran `kill "$GATEWAY_PID"` — killing a working gateway *because the backend
+   was offline*.
+
+Both are fixed, and both have regression tests
+(`tests/gatewaySupervision.test.ts`, `tests/startScript.test.ts`). The order is
+now environment → ports → bundle → **gateway** → prove port 3000 answers →
+HWD-ZERO. Everything after the gateway is advisory. A build failure with a
+previous `dist` present serves the older bundle rather than nothing.
+
+A third fix is about spelling: the gateway now binds **both loopback
+families**, `127.0.0.1` and `::1`. On Android `localhost` commonly resolves to
+`::1` first, so a gateway bound only to IPv4 answers one spelling and refuses
+the other from the same device. A host without IPv6 skips the second listener
+and carries on.
+
+### The optional runtime app-server
+
+`ZERO_RUNTIME_WS_URL` points at the codex app-server, which drives the brain
+graph and realtime voice. It is genuinely optional — a phone running HWD-ZERO
+under Termux has no reason to run one — so health reports three values, not
+two: `healthy`, `offline`, and `not_configured`. Only the middle one is a
+degradation, and `READY` turns on HWD-ZERO's own operator stream. Waiting on a
+component the deployment does not run would make `READY` unreachable no matter
+how healthy the operator is.
+
 ## What the HWD-ZERO analysis actually found
 
-Checked against `ChrisTheKey/HWD-ZERO` at commit `d1d087c`:
+> **Superseded.** HWD-ZERO now ships `zero/server` — `python -m zero.server`
+> serves the contract below on `127.0.0.1:8000`, standard library only. The
+> analysis is kept because it explains why nothing here hardcodes a port.
+>
+> Checked against `ChrisTheKey/HWD-ZERO` at commit `d1d087c`:
 
 - **No HTTP server.** There is no `zero/api` package, no `uvicorn`, `fastapi`,
   `aiohttp`, `flask` or `http.server` anywhere in the repository, and no
@@ -110,8 +151,9 @@ be reachable:
 | `POST` | `/api/control/safe-mode` | the kill switch |
 | `WS` | `/ws/events` | `OperatorEvent` frames |
 
-Until that exists, the honest end state is: interface up, gateway healthy,
-`BACKEND OFFLINE`. That is a correct report, not a failure of this change.
+That contract now exists: see `zero/server` in HWD-ZERO and the endpoint table
+in its README. `python -m zero.server` serves it, standard library only, so it
+installs on a phone without a compiler.
 
 ## The connection state machine
 
@@ -129,8 +171,11 @@ STARTING → CONNECTING → BACKEND_CONNECTED → READY
 `READY` requires **all three** at once:
 
 1. `/api/health` reports `zero: "healthy"` (the gateway probed HWD-ZERO), and
-2. both same-origin sockets are open, and
+2. the same-origin operator event stream is open, and
 3. ZERO returned real payload — a runtime snapshot or operator state.
+
+The optional codex app-server is not a fourth condition; when it is configured
+and down the state is `DEGRADED`, and when it is absent it is ignored.
 
 A rendered React bundle satisfies none of these. `UI LOADED ≠ ZERO READY`.
 
