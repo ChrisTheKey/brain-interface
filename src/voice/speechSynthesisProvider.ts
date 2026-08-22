@@ -1,33 +1,30 @@
 /**
- * Browser speech-synthesis fallback for ZERO's voice.
+ * The last-resort speaker: the browser's own synthesizer.
  *
- * Used when ZERO's realtime voice is unavailable (no experimental API, no
- * thread, offline, or not authenticated). The platform synthesizer cannot be
- * routed into the Web Audio graph, so `connect()` returns false and the smoke
- * is driven by this provider's own level source instead:
+ * Used only when HWD-ZERO can neither stream PCM over `/ws/voice` nor render
+ * audio at `/api/voice/tts`. The platform synthesizer cannot be routed into the
+ * Web Audio graph, so there is no signal to analyse. Rather than faking one,
+ * this provider exposes an *estimated* level source and says so:
  *
  * - Primary: the engine's real `boundary` events — one impulse per spoken
- *   word, which is what makes the smoke pulse in sync with the words.
+ *   word, which is the only real timing signal the platform gives us.
  * - Fallback: if the engine emits no boundary events (some Android voices do
- *   not), the word cadence is *estimated* from the utterance text and the
- *   configured rate. That is an estimate, not a measurement, and it only ever
- *   runs while an utterance is actually speaking.
+ *   not), the word cadence is derived from the utterance and the configured
+ *   rate. That is an estimate, and it only runs while an utterance is speaking.
+ *
+ * `estimated` is true for both, and the HUD renders that as a warning so the
+ * smoke is never mistaken for a measurement.
  */
 import type { AudioLevels } from '../audio/analyser';
-import {
-  rankVoiceCandidates,
-  type VoiceCharacter,
-  type VoiceProvider,
-  type VoiceSpeakOptions,
-} from './provider';
+import { rankVoiceCandidates, type VoiceCharacter } from './provider';
 
 /** Words per second at rate 1.0 — used only for the estimated cadence. */
 const BASE_WORDS_PER_SECOND = 2.6;
 
-export class SpeechSynthesisVoiceProvider implements VoiceProvider {
-  readonly id = 'speech-synthesis' as const;
-  readonly label = 'Browser speech synthesis';
-  readonly unavailableReason = 'speechSynthesis is not available in this browser';
+export class SpeechSynthesisSpeaker {
+  readonly id = 'synthesis' as const;
+  /** These levels are derived from word timing, not from an audio signal. */
+  readonly estimated = true;
 
   private boundaryEnergy = 0;
   private speaking = false;
@@ -35,7 +32,7 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
   private wordCount = 0;
   private startedAt = 0;
   private estimatedWordIndex = -1;
-  private now: () => number;
+  private readonly now: () => number;
 
   constructor(
     private readonly character: VoiceCharacter,
@@ -44,16 +41,19 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
     this.now = now ?? (() => Date.now());
   }
 
-  isAvailable(): boolean {
+  static isSupported(): boolean {
     return typeof globalThis !== 'undefined' && 'speechSynthesis' in globalThis;
   }
 
-  connect(): boolean {
-    // No audio-graph access for platform TTS.
-    return false;
+  isAvailable(): boolean {
+    return SpeechSynthesisSpeaker.isSupported();
   }
 
-  /** Level source for the smoke: one impulse per word, silence in between. */
+  get isSpeaking(): boolean {
+    return this.speaking;
+  }
+
+  /** Estimated level source: one impulse per word, silence in between. */
   readLevels(): AudioLevels | null {
     if (!this.speaking) return null;
 
@@ -73,13 +73,14 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
       amplitude,
       peak: amplitude,
       low: 0.2 + this.boundaryEnergy * 0.5,
+      mid: 0.15 + this.boundaryEnergy * 0.45,
       high: this.boundaryEnergy * 0.75,
-      onset: this.boundaryEnergy,
+      transient: this.boundaryEnergy,
     };
   }
 
-  async speak(text: string, options?: VoiceSpeakOptions): Promise<void> {
-    if (!this.isAvailable()) throw new Error(this.unavailableReason);
+  async speak(text: string, signal?: AbortSignal): Promise<void> {
+    if (!this.isAvailable()) throw new Error('speechSynthesis is not available in this browser');
     const synth = globalThis.speechSynthesis;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = this.character.rate;
@@ -110,7 +111,7 @@ export class SpeechSynthesisVoiceProvider implements VoiceProvider {
       };
       utterance.onend = finish;
       utterance.onerror = finish;
-      options?.signal?.addEventListener('abort', () => {
+      signal?.addEventListener('abort', () => {
         synth.cancel();
         finish();
       });

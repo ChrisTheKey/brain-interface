@@ -1,59 +1,68 @@
 import { describe, expect, it } from 'vitest';
-import { base64ToBytes, decodePcm16Base64, SILENT_LEVELS } from '../src/audio/analyser';
-import { smokeParamsFromAudio, SmokeField } from '../src/render/smoke';
+import { bandEnergies, clamp01, SILENT_LEVELS } from '../src/audio/analyser';
+import { emissionFor, stepEnvelope } from '../src/three/Smoke';
 
-function pcm16Base64(samples: number[]): string {
-  const buffer = Buffer.alloc(samples.length * 2);
-  samples.forEach((value, index) => buffer.writeInt16LE(value, index * 2));
-  return buffer.toString('base64');
-}
+describe('band analysis', () => {
+  it('separates the three bands the brain reacts to', () => {
+    // 128 bins over 48 kHz: bin 0 ≈ 0 Hz, bin 127 ≈ 24 kHz.
+    const bins = new Uint8Array(128);
+    bins.fill(255, 0, 2); // < 400 Hz
+    expect(bandEnergies(bins, 48_000).low).toBeGreaterThan(0.9);
+    expect(bandEnergies(bins, 48_000).mid).toBe(0);
+    expect(bandEnergies(bins, 48_000).high).toBe(0);
 
-describe('ZERO realtime audio decoding', () => {
-  it('decodes interleaved PCM16 chunks into planar float samples', () => {
-    const base64 = pcm16Base64([0, 32767, -32768, 16384]);
-    const planes = decodePcm16Base64(base64, 2, base64ToBytes);
-    expect(planes).toHaveLength(2);
-    expect(planes[0]?.[0]).toBeCloseTo(0, 5);
-    expect(planes[0]?.[1]).toBeCloseTo(-1, 4);
-    expect(planes[1]?.[0]).toBeCloseTo(0.99997, 4);
-    expect(planes[1]?.[1]).toBeCloseTo(0.5, 4);
+    bins.fill(0);
+    bins.fill(255, 11, 128); // everything above ~2 kHz
+    expect(bandEnergies(bins, 48_000).high).toBeGreaterThan(0.9);
+    expect(bandEnergies(bins, 48_000).low).toBe(0);
+    expect(bandEnergies(bins, 48_000).mid).toBe(0);
+
+    bins.fill(0);
+    bins.fill(255, 2, 11); // 400 Hz … 2 kHz
+    expect(bandEnergies(bins, 48_000).mid).toBeGreaterThan(0.9);
+    expect(bandEnergies(bins, 48_000).low).toBe(0);
+    expect(bandEnergies(bins, 48_000).high).toBe(0);
   });
 
-  it('handles empty chunks without throwing', () => {
-    expect(decodePcm16Base64('', 1, base64ToBytes)[0]?.length).toBe(0);
+  it('returns nothing for an empty spectrum instead of dividing by zero', () => {
+    expect(bandEnergies(new Uint8Array(0), 48_000)).toEqual({ low: 0, mid: 0, high: 0 });
+  });
+
+  it('clamps anything that is not a finite 0..1 value', () => {
+    expect(clamp01(Number.NaN)).toBe(0);
+    expect(clamp01(-3)).toBe(0);
+    expect(clamp01(4)).toBe(1);
+    expect(clamp01(0.5)).toBe(0.5);
   });
 });
 
 describe('smoke reacts to the measured signal', () => {
-  it('emits nothing while ZERO is silent', () => {
-    const params = smokeParamsFromAudio(SILENT_LEVELS);
-    expect(params.emission).toBe(0);
-    expect(params.opacity).toBe(0);
-
-    const field = new SmokeField();
-    for (let i = 0; i < 60; i += 1) field.update(1, SILENT_LEVELS, () => 0.5);
-    expect(field.count).toBe(0);
+  it('emits nothing at all while ZERO is silent', () => {
+    expect(emissionFor(SILENT_LEVELS.amplitude, SILENT_LEVELS.low, SILENT_LEVELS.transient)).toBe(0);
+    // Below the noise floor is still silence, not a very quiet voice.
+    expect(emissionFor(0.01, 0.9, 0.9)).toBe(0);
   });
 
-  it('scales emission, expansion and turbulence with amplitude and bands', () => {
-    const calm = smokeParamsFromAudio({ amplitude: 0.2, peak: 0.3, low: 0.3, high: 0.1, onset: 0 });
-    const emphasised = smokeParamsFromAudio({ amplitude: 0.8, peak: 0.95, low: 0.7, high: 0.6, onset: 0.9 });
-
-    expect(emphasised.emission).toBeGreaterThan(calm.emission);
-    expect(emphasised.velocity).toBeGreaterThan(calm.velocity);
-    expect(emphasised.turbulence).toBeGreaterThan(calm.turbulence);
-    expect(emphasised.density).toBeGreaterThan(calm.density);
-    expect(emphasised.opacity).toBeGreaterThan(calm.opacity);
+  it('emits more for a louder voice, and more again on a stressed word', () => {
+    const quiet = emissionFor(0.2, 0.2, 0);
+    const loud = emissionFor(0.7, 0.2, 0);
+    const stressed = emissionFor(0.7, 0.2, 0.8);
+    expect(loud).toBeGreaterThan(quiet);
+    expect(stressed).toBeGreaterThan(loud);
+    expect(stressed).toBeLessThanOrEqual(1);
   });
 
-  it('spawns and retires particles as the voice runs and stops', () => {
-    const field = new SmokeField({ maxParticles: 50 });
-    const speaking = { amplitude: 0.6, peak: 0.8, low: 0.5, high: 0.4, onset: 0.2 };
-    for (let i = 0; i < 30; i += 1) field.update(1, speaking, () => 0.5);
-    expect(field.count).toBeGreaterThan(0);
-    expect(field.count).toBeLessThanOrEqual(50);
+  it('opens fast and closes slowly, so a sentence starts at once and dissipates', () => {
+    let attack = 0;
+    for (let i = 0; i < 6; i += 1) attack = stepEnvelope(attack, 1, 1 / 60);
+    expect(attack).toBeGreaterThan(0.5);
 
-    for (let i = 0; i < 400; i += 1) field.update(1, SILENT_LEVELS, () => 0.5);
-    expect(field.count).toBe(0);
+    let release = 1;
+    for (let i = 0; i < 6; i += 1) release = stepEnvelope(release, 0, 1 / 60);
+    expect(release).toBeGreaterThan(0.85);
+
+    let settled = 1;
+    for (let i = 0; i < 300; i += 1) settled = stepEnvelope(settled, 0, 1 / 60);
+    expect(settled).toBeLessThan(0.02);
   });
 });

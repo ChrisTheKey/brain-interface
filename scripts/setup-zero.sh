@@ -15,9 +15,15 @@ npm run build
 
 if [ ! -f "$ZERO_ROOT/.env.local" ]; then
   cp "$ZERO_ROOT/.env.example" "$ZERO_ROOT/.env.local"
-  echo "  created .env.local — set VITE_ZERO_AGENT_ROOT to your ZERO-WORKSPACE."
+  echo "  created .env.local — everything in it is presentation and voice tuning."
+  echo "  There is no backend address to set: the gateway is the only origin."
+fi
+
+if zero_is_termux; then
+  echo
+  echo "  Termux: run \`termux-wake-lock\` so Android does not suspend the gateway."
 fi
 
 echo
-echo "Next: scripts/start-zero.sh   (laptop only)"
-echo "      scripts/start-zero-lan.sh (laptop + phone)"
+echo "Next:  scripts/zero.sh          one command, laptop only"
+echo "       scripts/zero.sh --lan    one command, laptop + phone"

@@ -1,12 +1,16 @@
 /**
- * Speech input: microphone → speech-to-text → ZERO.
+ * Speech input: a real microphone, a real speech-to-text engine.
  *
- *   Microphone → Speech Input Service → Speech-to-Text Provider → ZERO pipeline
+ *   Microphone → SpeechRecognition → partial transcript → HWD-ZERO
+ *                                  → final transcript   → HWD-ZERO
  *
- * The provider is swappable. The default uses the browser's SpeechRecognition
- * engine, which is a real STT engine (Chrome/Android/Samsung Internet) and
- * needs no credentials. The microphone is only ever opened after an explicit
- * user action, and every stream, track and audio node is released on stop.
+ * The default engine is the browser's `SpeechRecognition`, which is a real STT
+ * engine on Chrome, Android and Samsung Internet and needs no credentials. The
+ * microphone is only ever opened after an explicit user action, and every
+ * stream, track and audio node is released on stop.
+ *
+ * Partials are what the engine is still refining; the final transcript is the
+ * sentence that is handed over. Both are surfaced, never merged, never faked.
  */
 
 export type SpeechInputState = 'idle' | 'listening' | 'denied' | 'unsupported' | 'error';
@@ -17,16 +21,13 @@ export interface SpeechTranscript {
   final: boolean;
 }
 
-export interface SpeechInputProvider {
-  readonly id: string;
-  isSupported(): boolean;
-  start(handlers: {
-    onTranscript: (transcript: SpeechTranscript) => void;
-    onEnd: () => void;
-    onError: (error: string) => void;
-  }): void;
-  stop(): void;
-  dispose(): void;
+export interface SpeechInputHandlers {
+  /** Fires on every revision — this is the live partial transcript. */
+  onPartial: (text: string) => void;
+  /** Fires once the engine commits a segment. */
+  onFinal: (text: string) => void;
+  onEnd: (finalText: string) => void;
+  onError: (error: string) => void;
 }
 
 /** Minimal shape of the platform SpeechRecognition API. */
@@ -45,9 +46,7 @@ interface RecognitionLike {
 
 interface SpeechRecognitionResultEventLike {
   resultIndex: number;
-  results: ArrayLike<
-    ArrayLike<{ transcript: string }> & { isFinal: boolean }
-  >;
+  results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }>;
 }
 
 type RecognitionConstructor = new () => RecognitionLike;
@@ -61,49 +60,77 @@ export function getRecognitionConstructor(): RecognitionConstructor | null {
   return scope.SpeechRecognition ?? scope.webkitSpeechRecognition ?? null;
 }
 
-export class WebSpeechInputProvider implements SpeechInputProvider {
+/**
+ * Merges recognition results into "what is committed" and "what is still
+ * being revised". Pure, so the transcript logic is unit-tested rather than
+ * only observed in a browser.
+ */
+export function mergeResults(
+  event: SpeechRecognitionResultEventLike,
+  committed: string,
+): { committed: string; partial: string } {
+  let nextCommitted = committed;
+  let partial = '';
+  for (let i = event.resultIndex; i < event.results.length; i += 1) {
+    const result = event.results[i];
+    if (!result) continue;
+    const alternative = result[0];
+    if (!alternative) continue;
+    const text = alternative.transcript;
+    if (result.isFinal) {
+      nextCommitted = `${nextCommitted} ${text}`.trim();
+    } else {
+      partial = `${partial} ${text}`.trim();
+    }
+  }
+  return { committed: nextCommitted, partial };
+}
+
+export class WebSpeechInput {
   readonly id = 'web-speech';
   private recognition: RecognitionLike | null = null;
+  private committed = '';
 
-  constructor(private readonly language: string) {}
+  constructor(
+    private readonly language: string,
+    /** Keep listening across pauses — the phone's engine likes short bursts. */
+    private readonly continuous = true,
+  ) {}
 
   isSupported(): boolean {
     return getRecognitionConstructor() !== null;
   }
 
-  start(handlers: {
-    onTranscript: (transcript: SpeechTranscript) => void;
-    onEnd: () => void;
-    onError: (error: string) => void;
-  }): void {
+  start(handlers: SpeechInputHandlers): void {
     const Recognition = getRecognitionConstructor();
     if (!Recognition) {
       handlers.onError('SpeechRecognition is not available in this browser');
       return;
     }
     this.stop();
+    this.committed = '';
 
     const recognition = new Recognition();
     recognition.lang = this.language;
-    recognition.continuous = false;
+    recognition.continuous = this.continuous;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const result = event.results[i];
-        if (!result) continue;
-        const alternative = result[0];
-        if (!alternative) continue;
-        handlers.onTranscript({ text: alternative.transcript, final: result.isFinal });
+      const merged = mergeResults(event, this.committed);
+      if (merged.committed !== this.committed) {
+        this.committed = merged.committed;
+        handlers.onFinal(this.committed);
       }
+      // The live view is what is committed so far plus what is being revised.
+      handlers.onPartial(`${this.committed} ${merged.partial}`.trim());
     };
     recognition.onerror = (event) => {
       const code = event.error ?? 'unknown';
       handlers.onError(code === 'not-allowed' ? 'microphone permission denied' : code);
     };
     recognition.onend = () => {
-      handlers.onEnd();
+      handlers.onEnd(this.committed.trim());
     };
 
     this.recognition = recognition;
@@ -117,9 +144,6 @@ export class WebSpeechInputProvider implements SpeechInputProvider {
   stop(): void {
     const recognition = this.recognition;
     if (!recognition) return;
-    recognition.onresult = null;
-    recognition.onerror = null;
-    recognition.onend = null;
     try {
       recognition.stop();
     } catch {
@@ -128,8 +152,23 @@ export class WebSpeechInputProvider implements SpeechInputProvider {
     this.recognition = null;
   }
 
+  /** Drop the session without emitting a final transcript. */
+  abort(): void {
+    const recognition = this.recognition;
+    if (!recognition) return;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+    try {
+      recognition.abort();
+    } catch {
+      /* already stopped */
+    }
+    this.recognition = null;
+  }
+
   dispose(): void {
-    this.stop();
+    this.abort();
   }
 }
 

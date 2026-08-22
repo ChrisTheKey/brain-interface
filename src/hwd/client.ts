@@ -2,18 +2,19 @@
  * The client for HWD-ZERO, the operator.
  *
  * Same origin, always: the gateway on port 3000 serves this bundle and proxies
- * `/api` and `/ws` to HWD-ZERO on loopback. So there is no host to configure
- * here and no credential to embed — whoever loaded the page is already
- * authenticated by the gateway, and HWD-ZERO itself is not reachable from the
- * network at all.
+ * `/api`, `/ws/events` and `/ws/voice` to HWD-ZERO on loopback. So there is no
+ * host to configure here and no credential to embed — whoever loaded the page
+ * is already authenticated by the gateway, and HWD-ZERO itself is not reachable
+ * from the network at all.
  *
- * The client reads and requests. It never decides: no retry that re-runs a
- * mission, no approval it grants on its own, no state it maintains that the
- * operator does not already hold.
+ * The client reads and requests. It never decides: no routing it performs, no
+ * agent process it starts, no shell it touches, no approval it grants on its
+ * own, no state it maintains that the operator does not already hold.
  */
 
 import type {
   ApprovalTicket,
+  GatewayHealth,
   OperatorApproval,
   OperatorEvent,
   OperatorMission,
@@ -30,6 +31,8 @@ export interface OperatorClientOptions {
   socketFactory?: (url: string) => WebSocket;
   /** Backoff for the event stream, in ms. */
   reconnectDelayMs?: number;
+  /** Injected so tests do not depend on `window.location`. */
+  origin?: { protocol: string; host: string };
 }
 
 export class OperatorError extends Error {
@@ -52,6 +55,7 @@ export class HwdZeroClient {
   private readonly fetchImpl: typeof fetch;
   private readonly socketFactory: (url: string) => WebSocket;
   private readonly reconnectDelayMs: number;
+  private readonly origin: { protocol: string; host: string } | null;
   private socket: WebSocket | null = null;
   private closedByUs = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -61,6 +65,11 @@ export class HwdZeroClient {
     this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
     this.socketFactory = options.socketFactory ?? ((url) => new WebSocket(url));
     this.reconnectDelayMs = options.reconnectDelayMs ?? 2_000;
+    this.origin =
+      options.origin ??
+      (typeof window !== 'undefined' && window.location
+        ? { protocol: window.location.protocol, host: window.location.host }
+        : null);
   }
 
   // ------------------------------------------------------------------ reads
@@ -97,6 +106,11 @@ export class HwdZeroClient {
       throw new OperatorError(detail, response.status);
     }
     return payload as T;
+  }
+
+  /** The gateway's own health — answers even when HWD-ZERO is down. */
+  gatewayHealth(): Promise<GatewayHealth> {
+    return this.get('/api/gateway/health');
   }
 
   health(): Promise<{ status: string; safe_mode: boolean }> {
@@ -160,14 +174,51 @@ export class HwdZeroClient {
     return this.post('/api/control/safe-mode', { enabled });
   }
 
+  /**
+   * Optional contract: synthesise a text into an audio file. Used when the
+   * operator has no `/ws/voice` stream but can still voice a sentence — the
+   * result is decoded into the Web Audio graph, so the brain still reacts to
+   * the real signal rather than to a guess.
+   *
+   * Returns `null` when the operator does not implement it (404 / 501).
+   */
+  async synthesize(text: string, signal?: AbortSignal): Promise<ArrayBuffer | null> {
+    const response = await this.fetchImpl(joinPath(this.baseUrl, '/api/voice/tts'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'audio/*' },
+      body: JSON.stringify({ text }),
+      ...(signal ? { signal } : {}),
+    });
+    if (response.status === 404 || response.status === 501 || response.status === 405) return null;
+    if (!response.ok) {
+      throw new OperatorError(`tts failed (${response.status})`, response.status);
+    }
+    return response.arrayBuffer();
+  }
+
   // ----------------------------------------------------------------- events
 
-  eventsUrl(): string {
+  /** Absolute ws:// URL for a gateway path, same origin as the page. */
+  socketUrl(path: string): string {
     if (this.baseUrl) {
-      return `${this.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws/events`;
+      return `${this.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}${path}`;
     }
-    const { protocol, host } = window.location;
-    return `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws/events`;
+    if (!this.origin) return path;
+    const scheme = this.origin.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${scheme}//${this.origin.host}${path}`;
+  }
+
+  eventsUrl(): string {
+    return this.socketUrl('/ws/events');
+  }
+
+  voiceUrl(): string {
+    return this.socketUrl('/ws/voice');
+  }
+
+  /** Opens a raw socket on a gateway path (used by the voice channel). */
+  openSocket(path: string): WebSocket {
+    return this.socketFactory(this.socketUrl(path));
   }
 
   /**

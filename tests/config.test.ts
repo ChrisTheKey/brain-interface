@@ -3,39 +3,64 @@ import { resolveConfig } from '../src/config';
 import { rankVoiceCandidates } from '../src/voice/provider';
 
 describe('configuration', () => {
-  it('falls back to documented defaults when nothing is set', () => {
+  it('is same-origin by default: no backend address lives in the bundle', () => {
     const resolved = resolveConfig({});
-    expect(resolved.zeroWsUrl).toBe('ws://127.0.0.1:8787');
+    expect(resolved.apiBaseUrl).toBe('');
     expect(resolved.backgroundImage).toBe('/reference/red-background.jpg');
-    expect(resolved.voice.provider).toBe('zero-realtime');
+    expect(resolved.voice.mode).toBe('auto');
+    expect(resolved.speech.provider).toBe('web-speech');
   });
 
-  it('reads the ZERO endpoint and workspace scoping from the environment', () => {
+  it('reads presentation and voice tuning from the environment', () => {
     const resolved = resolveConfig({
-      VITE_ZERO_WS_URL: 'ws://10.0.0.4:9000',
-      VITE_ZERO_CWDS: '/workspace/zero, /workspace/other ',
-      VITE_ZERO_EXPERIMENTAL_API: 'false',
-      VITE_ZERO_VOICE_PROVIDER: 'speech-synthesis',
-      VITE_ZERO_THREAD_LIMIT: '12',
+      VITE_ZERO_API_BASE: 'http://127.0.0.1:3000/',
+      VITE_ZERO_SPEECH_LANGUAGE: 'en-GB',
+      VITE_ZERO_VOICE_MODE: 'synthesis',
+      VITE_ZERO_VOICE_NAMES: 'Daniel, Google UK English Male ',
+      VITE_ZERO_RENDER_QUALITY: 'low',
+      VITE_ZERO_BLOOM: 'false',
+      VITE_ZERO_MAX_PIXEL_RATIO: '1.5',
     });
-    expect(resolved.zeroWsUrl).toBe('ws://10.0.0.4:9000');
-    expect(resolved.extraCwds).toEqual(['/workspace/zero', '/workspace/other']);
-    expect(resolved.experimentalApi).toBe(false);
-    expect(resolved.voice.provider).toBe('speech-synthesis');
-    expect(resolved.threadLimit).toBe(12);
+    expect(resolved.apiBaseUrl).toBe('http://127.0.0.1:3000');
+    expect(resolved.speech.language).toBe('en-GB');
+    expect(resolved.voice.mode).toBe('synthesis');
+    expect(resolved.voice.preferredVoices).toEqual(['Daniel', 'Google UK English Male']);
+    expect(resolved.render.quality).toBe('low');
+    expect(resolved.render.bloom).toBe(false);
+    expect(resolved.render.maxPixelRatio).toBe(1.5);
+  });
+
+  it('falls back rather than accepting an unknown enum value', () => {
+    const resolved = resolveConfig({
+      VITE_ZERO_VOICE_MODE: 'telepathy',
+      VITE_ZERO_RENDER_QUALITY: 'ultra',
+      VITE_ZERO_SPEECH_PROVIDER: 'whisper',
+    });
+    expect(resolved.voice.mode).toBe('auto');
+    expect(resolved.render.quality).toBe('auto');
+    expect(resolved.speech.provider).toBe('web-speech');
+  });
+
+  it('clamps the intervals that would otherwise hammer the operator', () => {
+    const resolved = resolveConfig({
+      VITE_ZERO_REFRESH_INTERVAL_MS: '10',
+      VITE_ZERO_RECONNECT_DELAY_MS: '1',
+    });
+    expect(resolved.refreshIntervalMs).toBe(2_000);
+    expect(resolved.reconnectDelayMs).toBe(500);
   });
 });
 
 describe('ZERO voice selection', () => {
   it('prefers configured voices, then male-sounding ones', () => {
     const voices = [
-      { name: 'Samantha', lang: 'en-US' },
+      { name: 'Microsoft Zira', lang: 'en-US' },
       { name: 'Daniel', lang: 'en-GB' },
       { name: 'Google UK English Male', lang: 'en-GB' },
     ];
     expect(rankVoiceCandidates(voices, ['Google UK English Male'])[0]?.name).toBe(
       'Google UK English Male',
     );
-    expect(rankVoiceCandidates(voices, [])[0]?.name).not.toBe('Samantha');
+    expect(rankVoiceCandidates(voices, [])[0]?.name).not.toBe('Microsoft Zira');
   });
 });

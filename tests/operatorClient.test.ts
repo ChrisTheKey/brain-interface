@@ -68,9 +68,60 @@ describe('HWD-ZERO client', () => {
     expect(granted.approved_gate).toBe('architecture');
   });
 
-  it('builds the event URL from the page origin, so no host is configured here', () => {
+  it('builds both socket URLs from the page origin, so no host is configured here', () => {
+    const sameOrigin = new HwdZeroClient({
+      origin: { protocol: 'http:', host: 'laptop.local:3000' },
+    });
+    expect(sameOrigin.eventsUrl()).toBe('ws://laptop.local:3000/ws/events');
+    expect(sameOrigin.voiceUrl()).toBe('ws://laptop.local:3000/ws/voice');
+  });
+
+  it('follows the page to wss when the gateway is served over TLS', () => {
+    const secure = new HwdZeroClient({ origin: { protocol: 'https:', host: 'zero.lan' } });
+    expect(secure.voiceUrl()).toBe('wss://zero.lan/ws/voice');
+  });
+
+  it('uses an explicit base only when one was configured (split dev setup)', () => {
     const client = new HwdZeroClient({ baseUrl: 'http://127.0.0.1:8000' });
     expect(client.eventsUrl()).toBe('ws://127.0.0.1:8000/ws/events');
+  });
+
+  it('treats a missing /api/voice/tts as "not implemented", not as a failure', async () => {
+    for (const status of [404, 405, 501]) {
+      const client = new HwdZeroClient({
+        fetchImpl: (async () => new Response('', { status })) as unknown as typeof fetch,
+      });
+      await expect(client.synthesize('ZERO online.')).resolves.toBeNull();
+    }
+  });
+
+  it('returns the rendered audio when the operator does implement it', async () => {
+    const client = new HwdZeroClient({
+      fetchImpl: (async () =>
+        new Response(new Uint8Array([1, 2, 3, 4]), {
+          status: 200,
+          headers: { 'content-type': 'audio/wav' },
+        })) as unknown as typeof fetch,
+    });
+    const audio = await client.synthesize('ZERO online.');
+    expect(audio?.byteLength).toBe(4);
+  });
+
+  it('surfaces a real TTS failure rather than silently falling back', async () => {
+    const client = new HwdZeroClient({
+      fetchImpl: (async () => new Response('', { status: 500 })) as unknown as typeof fetch,
+    });
+    await expect(client.synthesize('ZERO online.')).rejects.toBeInstanceOf(OperatorError);
+  });
+
+  it('asks the gateway about itself, which answers even when ZERO does not', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ gateway: 'ok', upstream: { reachable: false, checkedAt: 1 } }),
+    );
+    const client = new HwdZeroClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const health = await client.gatewayHealth();
+    expect(fetchImpl).toHaveBeenCalledWith('/api/gateway/health', expect.anything());
+    expect(health.upstream.reachable).toBe(false);
   });
 });
 

@@ -1,41 +1,12 @@
 /**
- * Voice provider abstraction.
+ * ZERO's voice character.
  *
- *   Voice Provider  →  ZERO Voice Service  →  Audio Playback  →  Audio Analyser
- *
- * Providers are interchangeable and carry no credentials: ZERO's own realtime
- * session is the default provider, the browser speech synthesizer is the
- * offline fallback. A provider that can route through the Web Audio graph
- * exposes `connect()`, which is what makes the smoke audio-reactive.
+ * The interface holds no credentials and no model: HWD-ZERO owns the voice.
+ * What lives here is the character that shapes the *fallback* synthesizer when
+ * the operator cannot stream audio itself, plus the ranking that picks the
+ * closest platform voice.
  */
-import type { AudioLevels } from '../audio/analyser';
 
-export type VoiceProviderId = 'zero-realtime' | 'speech-synthesis' | 'none';
-
-export interface VoiceSpeakOptions {
-  signal?: AbortSignal;
-}
-
-export interface VoiceProvider {
-  readonly id: VoiceProviderId;
-  readonly label: string;
-  /** True when the provider can actually be used in this environment. */
-  isAvailable(): Promise<boolean> | boolean;
-  /**
-   * Route the provider's output into the Web Audio graph. Providers that
-   * cannot expose their signal (browser speech synthesis) return false and
-   * the smoke stays at its floor instead of reacting to a faked signal.
-   */
-  connect(context: AudioContext, destination: AudioNode): Promise<boolean> | boolean;
-  speak(text: string, options?: VoiceSpeakOptions): Promise<void>;
-  stop(): void;
-  dispose(): void;
-  /** Optional coarse level source for providers without an audio graph. */
-  readLevels?(): AudioLevels | null;
-  readonly unavailableReason?: string;
-}
-
-/** ZERO's voice character, applied to every provider that can be shaped. */
 export interface VoiceCharacter {
   /** Slightly below neutral: measured, controlled delivery. */
   rate: number;
@@ -47,9 +18,8 @@ export interface VoiceCharacter {
 }
 
 /**
- * ZERO's voice character, handed to the realtime session as its prompt.
- * Deliberately description-driven: an original persona, no cloning and no
- * imitation of a specific performer.
+ * ZERO's persona. Deliberately description-driven: an original character, no
+ * cloning and no imitation of a specific performer.
  */
 export const ZERO_VOICE_PROMPT = [
   'You are ZERO, the central orchestrator of this system.',
@@ -80,9 +50,7 @@ export function rankVoiceCandidates<T extends { name: string; lang: string; defa
   const score = (voice: T): number => {
     const name = voice.name.toLowerCase();
     let value = 0;
-    const preferenceIndex = preferred.findIndex((entry) =>
-      name.includes(entry.toLowerCase()),
-    );
+    const preferenceIndex = preferred.findIndex((entry) => name.includes(entry.toLowerCase()));
     if (preferenceIndex >= 0) value += 1000 - preferenceIndex;
     if (/(male|david|daniel|alex|thomas|george|guy|ryan|brian|arthur|oliver)/.test(name)) {
       value += 40;

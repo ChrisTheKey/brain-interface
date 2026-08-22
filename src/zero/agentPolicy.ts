@@ -105,17 +105,31 @@ export const EXCLUDED_REPOSITORIES: readonly string[] = [
 /** Repositories that are part of the system but are not child agents. */
 export const SYSTEM_REPOSITORIES: readonly string[] = ['HWD-ZERO', 'brain-interface'] as const;
 
-/** Department accent colours. The node bodies stay black; only rims glow. */
+/**
+ * Department accent colours, as hex so both the CSS layer and the WebGL
+ * materials can use the same value. The node bodies stay obsidian; the colour
+ * lives in the rim, the filaments and the energy that travels along them.
+ */
 export const DEPARTMENT_COLORS: Record<Department, string> = {
-  orchestration: 'rgba(186, 148, 255, 1)',
-  acquisition: 'rgba(110, 208, 255, 1)',
-  social: 'rgba(255, 122, 196, 1)',
-  reputation: 'rgba(255, 140, 168, 1)',
-  infrastructure: 'rgba(112, 228, 190, 1)',
-  outreach: 'rgba(255, 178, 106, 1)',
-  seo: 'rgba(96, 214, 226, 1)',
-  funnel: 'rgba(226, 120, 255, 1)',
+  orchestration: '#ba94ff',
+  acquisition: '#6ed0ff',
+  social: '#ff7ac4',
+  reputation: '#ff8ca8',
+  infrastructure: '#70e4be',
+  outreach: '#ffb26a',
+  seo: '#60d6e2',
+  funnel: '#e278ff',
 };
+
+/** The same colour as an `rgba()` string, for the CSS layer. */
+export function departmentRgba(department: Department, alpha: number): string {
+  const hex = DEPARTMENT_COLORS[department];
+  const value = Number.parseInt(hex.slice(1), 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 const normalize = (value: string): string => value.trim().toLowerCase();
 

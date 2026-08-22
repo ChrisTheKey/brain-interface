@@ -5,11 +5,15 @@ import { join } from 'node:path';
 import {
   constantTimeEquals,
   createRateLimiter,
+  createUpstreamProbe,
   detectLanAddress,
   extractToken,
+  isTermux,
+  isWebSocketPath,
   loadOrCreateToken,
   readConfig,
   resolveStaticPath,
+  WS_PATHS,
 } from '../server/gateway.mjs';
 
 const tempDirs: string[] = [];
@@ -105,5 +109,49 @@ describe('LAN address detection', () => {
 
   it('returns null when the laptop has no network', () => {
     expect(detectLanAddress({ lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }] })).toBeNull();
+  });
+});
+
+describe('gateway websocket routing', () => {
+  it('exposes exactly the two sockets the interface speaks', () => {
+    expect(WS_PATHS).toEqual(['/ws/events', '/ws/voice']);
+    expect(isWebSocketPath('/ws/events')).toBe(true);
+    expect(isWebSocketPath('/ws/voice')).toBe(true);
+  });
+
+  it('refuses to forward any other upgrade upstream', () => {
+    expect(isWebSocketPath('/ws')).toBe(false);
+    expect(isWebSocketPath('/ws/anything')).toBe(false);
+    expect(isWebSocketPath('/ws/events/../admin')).toBe(false);
+    expect(isWebSocketPath('/api/state')).toBe(false);
+  });
+});
+
+describe('upstream health', () => {
+  it('reports HWD-ZERO as down rather than failing the gateway with it', async () => {
+    // Nothing is listening on this port, so the probe has to resolve, not throw.
+    const probe = createUpstreamProbe('http://127.0.0.1:59998', 250);
+    const status = await probe();
+    expect(status.reachable).toBe(false);
+    expect(status.error).toBeTruthy();
+  });
+
+  it('caches the probe so a polling UI cannot hammer a dead operator', async () => {
+    let now = 1_000;
+    const probe = createUpstreamProbe('http://127.0.0.1:59998', 100, () => now);
+    const first = await probe();
+    const second = await probe();
+    expect(second.checkedAt).toBe(first.checkedAt);
+    now += 5_000;
+    const third = await probe();
+    expect(third.checkedAt).toBeGreaterThan(first.checkedAt);
+  });
+});
+
+describe('Termux', () => {
+  it('recognises the phone so the start script can print the right hint', () => {
+    expect(isTermux({ TERMUX_VERSION: '0.118.0' })).toBe(true);
+    expect(isTermux({ PREFIX: '/data/data/com.termux/files/usr' })).toBe(true);
+    expect(isTermux({})).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { connect } from 'node:net';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,6 +39,38 @@ afterAll(() => {
   server?.close();
   rmSync(workDir, { recursive: true, force: true });
 });
+
+/** Performs a raw WebSocket handshake and returns the status line. */
+function upgrade(path: string, cookie: string): Promise<string> {
+  const { port } = new URL(base);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(port), '127.0.0.1', () => {
+      socket.write(
+        `GET ${path} HTTP/1.1\r\n` +
+          `host: 127.0.0.1:${port}\r\n` +
+          'upgrade: websocket\r\n' +
+          'connection: Upgrade\r\n' +
+          'sec-websocket-version: 13\r\n' +
+          'sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+          `cookie: ${cookie}\r\n\r\n`,
+      );
+    });
+    let received = '';
+    socket.on('data', (chunk) => {
+      received += chunk.toString();
+      if (received.includes('\r\n')) {
+        socket.destroy();
+        resolve(received.split('\r\n')[0] ?? '');
+      }
+    });
+    socket.on('close', () => resolve(received.split('\r\n')[0] ?? ''));
+    socket.on('error', reject);
+    setTimeout(() => {
+      socket.destroy();
+      resolve(received.split('\r\n')[0] ?? '');
+    }, 3_000);
+  });
+}
 
 describe('gateway server (LAN mode)', () => {
   it('refuses unauthenticated access', async () => {
@@ -79,6 +112,45 @@ describe('gateway server (LAN mode)', () => {
     });
     expect(response.status).toBe(502);
     expect((await response.json()).error).toBe('zero_api_unreachable');
+  });
+
+  it('stays up and keeps serving the interface while HWD-ZERO is down', async () => {
+    // The upstream in this suite is a port nothing listens on. The gateway is
+    // the last thing that may fail with it: the operator being offline must be
+    // something the interface can render, not a blank screen.
+    const health = await fetch(`${base}/api/gateway/health`);
+    expect(health.status).toBe(200);
+    const payload = await health.json();
+    expect(payload.upstream.reachable).toBe(false);
+    expect(payload.websocketPaths).toEqual(['/ws/events', '/ws/voice']);
+
+    const page = await fetch(`${base}/?token=${token}`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('brain');
+  });
+
+  it('answers a websocket upgrade with 502 when the operator is unreachable', async () => {
+    const status = await upgrade('/ws/voice', `zero_token=${encodeURIComponent(token)}`);
+    // A silent socket destroy looks like a network glitch and makes the client
+    // reconnect hot; 502 tells it to back off.
+    expect(status).toContain('502');
+  });
+
+  it('refuses an unauthenticated upgrade before it reaches HWD-ZERO', async () => {
+    expect(await upgrade('/ws/events', 'zero_token=wrong')).toContain('401');
+  });
+
+  it('refuses an upgrade on any path other than the two it serves', async () => {
+    const status = await upgrade('/ws/admin', `zero_token=${encodeURIComponent(token)}`);
+    expect(status).toContain('404');
+  });
+
+  it('tells a client that forgot to upgrade to upgrade', async () => {
+    const response = await fetch(`${base}/ws/events`, {
+      headers: { cookie: `zero_token=${encodeURIComponent(token)}` },
+    });
+    expect(response.status).toBe(426);
+    expect((await response.json()).error).toBe('upgrade_required');
   });
 
   it('never serves files outside the build directory', async () => {

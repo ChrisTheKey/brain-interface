@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OperatorError } from '../hwd/client';
 import type { HwdZeroClient } from '../hwd/client';
 import type {
+  GatewayHealth,
   OperatorApproval,
   OperatorConnection,
   OperatorEvent,
@@ -10,6 +11,8 @@ import type {
   OperatorState,
   OperatorTask,
 } from '../hwd/types';
+import { foldAgentRuntime, type AgentRuntimeFold } from '../runtime/agentActivity';
+import { foldMissionPhase, type MissionPhase } from '../runtime/states';
 
 /**
  * HWD-ZERO's live state, as the interface sees it.
@@ -18,7 +21,8 @@ import type {
  * it is pushed, immediate, and driven by mission journals. The periodic read
  * is the correction: after a reconnect, or a mission the phone slept through,
  * the lists come from the operator rather than from replayed events. Nothing
- * here derives state the operator did not report.
+ * here derives state the operator did not report, and nothing here decides:
+ * every write is a request the operator is free to refuse.
  */
 
 export const OPERATOR_EVENT_LIMIT = 200;
@@ -32,9 +36,18 @@ export interface OperatorView {
   approvals: OperatorApproval[];
   tasks: OperatorTask[];
   events: OperatorEvent[];
+  /** Which agents are running, blocked or failing — folded from the stream. */
+  agentRuntime: AgentRuntimeFold;
+  /** Newest mission lifecycle phase seen on the stream. */
+  missionPhase: MissionPhase | null;
+  /** A runtime state HWD-ZERO reported itself, if it does. */
+  reportedState: string | null;
+  /** The gateway's own view: it answers even when HWD-ZERO does not. */
+  gateway: GatewayHealth | null;
   /** Missions the operator currently reports as running. */
   runningMissionIds: string[];
   safeMode: boolean;
+  /** Contracts the operator could not load — the reason comes from it. */
   refresh: () => Promise<void>;
   startMission: (task: string) => Promise<void>;
   approve: (approval: OperatorApproval) => Promise<void>;
@@ -63,9 +76,20 @@ export function useOperator(
   const [approvals, setApprovals] = useState<OperatorApproval[]>([]);
   const [tasks, setTasks] = useState<OperatorTask[]>([]);
   const [events, setEvents] = useState<OperatorEvent[]>([]);
+  const [gateway, setGateway] = useState<GatewayHealth | null>(null);
+  const [reportedState, setReportedState] = useState<string | null>(null);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
+    // The gateway probe is separate and never fails the whole read: it is the
+    // one thing that still works when the operator is down.
+    void client
+      .gatewayHealth()
+      .then((health) => {
+        if (mounted.current) setGateway(health);
+      })
+      .catch(() => undefined);
+
     try {
       const [nextState, nextRegistry, nextMissions, nextApprovals, nextTasks] = await Promise.all([
         client.state(),
@@ -120,13 +144,18 @@ export function useOperator(
             ? next.slice(next.length - OPERATOR_EVENT_LIMIT)
             : next;
         });
+        if (event.type === 'zero.state.changed') {
+          const reported = event.payload?.['state'];
+          setReportedState(typeof reported === 'string' ? reported : null);
+        }
         // A mission that finished or a gate that opened changes the lists,
         // and those come from the operator rather than from the event.
         if (
           event.type === 'mission.completed' ||
           event.type === 'mission.failed' ||
           event.type === 'approval.required' ||
-          event.type === 'approval.approved'
+          event.type === 'approval.approved' ||
+          event.type === 'approval.denied'
         ) {
           void refresh();
         }
@@ -183,6 +212,18 @@ export function useOperator(
     [missions],
   );
 
+  const knownAgentIds = useMemo(
+    () => (registry?.agents ?? []).map((agent) => agent.id),
+    [registry],
+  );
+
+  const agentRuntime = useMemo(
+    () => foldAgentRuntime(events, approvals, knownAgentIds),
+    [events, approvals, knownAgentIds],
+  );
+
+  const missionPhase = useMemo(() => foldMissionPhase(events), [events]);
+
   return {
     connection,
     error,
@@ -192,6 +233,10 @@ export function useOperator(
     approvals,
     tasks,
     events,
+    agentRuntime,
+    missionPhase,
+    reportedState,
+    gateway,
     runningMissionIds,
     safeMode: state?.safe_mode ?? false,
     refresh,
