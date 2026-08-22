@@ -199,6 +199,45 @@ ZERO-WORKSPACE/
 └── …
 ```
 
+## Windows 11 (ThinkPad)
+
+One command, from a machine with nothing set up to a running ZERO:
+
+```powershell
+cd "$HOME\ZERO-WORKSPACE\brain-interface"
+git fetch origin
+git checkout -B claude/zero-termux-runtime-fix origin/claude/zero-termux-runtime-fix
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\zero-windows-one-shot.ps1"
+```
+
+`-ExecutionPolicy Bypass` applies to that one process. Nothing here changes the
+machine's execution policy, its firewall, Defender, UAC or the registry, and no
+step needs elevation.
+
+```powershell
+.\scripts\zero-windows-one-shot.ps1   # update, install, build, start, diagnose
+.\scripts\zero-windows-start.ps1      # start only            (-Lan, -NoBackend, -NoSupervise)
+.\scripts\zero-windows-status.ps1     # what is actually up
+.\scripts\zero-windows-doctor.ps1     # PASS / WARN / FAIL, with a remedy each
+.\scripts\zero-windows-stop.ps1       # stop what these scripts started
+```
+
+Same architecture as the phone, same canonical runtime: the gateway on
+`127.0.0.1:3000` serves the interface, `/api` and `/ws`; HWD-ZERO answers on
+`127.0.0.1:8000`; whisper.cpp runs locally; ZeroSession is the runtime. Windows
+adds no second runtime and no separate voice path — the browser's microphone
+reaches the same `/ws/voice` and the same `WhisperCppProvider`.
+
+Loopback by default. Windows asks about public networks the moment something
+binds `0.0.0.0`, and the interface has no business there until `-Lan` says so.
+
+Two Windows specifics worth knowing. `Start-Process` cannot send stdout and
+stderr to one file, so each log has a companion — `gateway.log` and
+`gateway.err.log` — and every tail reads both. And `SO_REUSEADDR` means the
+opposite thing on Windows to what it means on POSIX: it would let a second
+HWD-ZERO bind a port the first is serving, so HWD-ZERO does not set it there
+and a duplicate start fails honestly instead.
+
 ## Laptop and Samsung Galaxy access
 
 The gateway is the single origin — port 3000 serves the interface, `/api` and
