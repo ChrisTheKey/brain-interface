@@ -188,6 +188,49 @@ else
   hint "bash scripts/zero-termux-one-shot.sh   (downloads ggml-tiny.bin, ~75 MB)"
 fi
 
+# ------------------------------------------------------------------- voice out
+
+group "VOICE OUT (TTS)"
+# Read from the same environment the gateway runs in. The key itself is never
+# printed, never echoed and never length-checked out loud.
+zero_load_env
+if [ "${ZERO_LOCAL_ONLY:-false}" = "true" ]; then
+  pass "LOCAL-ONLY is ON — no cloud voice is called, whatever else is set"
+else
+  ok_local_only=off
+  case "${FISH_AUDIO_ENABLED:-false}" in
+    1|true|yes|on) ok_local_only=on ;;
+  esac
+  if [ "$ok_local_only" != "on" ]; then
+    warn "Fish Audio is NOT CONFIGURED — ZERO speaks with the browser voice"
+    hint "set FISH_AUDIO_ENABLED=true and FISH_API_KEY in .env.local"
+  else
+    pass "Fish Audio is CONFIGURED"
+    if [ -n "${FISH_API_KEY:-}" ]; then
+      pass "API key PRESENT"
+    else
+      fail "API key MISSING"
+      hint "Fish Audio requires a Fish API key. Put FISH_API_KEY in .env.local (git-ignored)."
+    fi
+    case "${FISH_AUDIO_MODEL:-s2.1-pro-free}" in
+      s2.1-pro-free) pass "free model s2.1-pro-free selected" ;;
+      *) warn "model ${FISH_AUDIO_MODEL} is not the free tier — this one bills" ;;
+    esac
+    if [ -n "${FISH_AUDIO_VOICE_ID:-}" ]; then
+      pass "voice ${FISH_AUDIO_VOICE_NAME:-$FISH_AUDIO_VOICE_ID}"
+    else
+      fail "no voice configured"
+      hint "set FISH_AUDIO_VOICE_ID — see .env.example for two public ones"
+    fi
+  fi
+fi
+TTS_STATE="$(zero_health_field "http://127.0.0.1:$ZERO_UI_PORT/api/voice/tts/status" ready)"
+case "$TTS_STATE" in
+  true)  pass "TTS READY — cloud (text is sent to Fish Audio)" ;;
+  false) warn "TTS DEGRADED — the browser voice speaks instead" ;;
+  *)     warn "the gateway did not answer /api/voice/tts/status" ;;
+esac
+
 # ------------------------------------------------------------------- state
 
 group "STATE"

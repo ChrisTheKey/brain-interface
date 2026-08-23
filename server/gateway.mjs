@@ -34,6 +34,8 @@ import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { loadTtsConfig, publicStatus } from './tts/config.mjs';
+import { redact, synthesize } from './tts/fishAudio.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..');
@@ -413,6 +415,40 @@ export function probeSocket(target, timeoutMs = 2_000) {
  * "ZERO is up", and neither of them is "the event stream works" — the
  * interface needs all three to decide whether it may say READY.
  */
+/**
+ * Read a small JSON body.
+ *
+ * Bounded: a request that keeps sending must not be able to fill the gateway's
+ * memory, and nothing legitimate here is larger than a spoken paragraph.
+ */
+function readJsonBody(req, limit = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (chunks.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
 export async function collectHealth(config, extra = {}) {
   const runtimeConfigured = Boolean(config.zeroRuntimeWs);
   const [zero, websocket] = await Promise.all([
@@ -519,6 +555,89 @@ export function startGateway(config = readConfig()) {
         'set-cookie',
         `zero_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
       );
+    }
+
+    /*
+      ZERO's cloud voice.
+
+      Handled here rather than proxied to HWD-ZERO because this is the only
+      process that holds FISH_API_KEY — the browser asks for audio, the
+      gateway is what has the credential. Everything else under /api still
+      goes to the runtime.
+
+      Placed *after* the pairing gate deliberately: synthesis costs money and
+      sends text to a third party, so an unpaired device on the LAN must not
+      be able to trigger it.
+    */
+    if (url.pathname === '/api/voice/tts/status') {
+      // No key, no key length, no key prefix. Just what the interface needs to
+      // tell the operator whether ZERO can speak and where the words go.
+      sendJson(res, 200, publicStatus(loadTtsConfig()));
+      return;
+    }
+
+    if (url.pathname === '/api/voice/tts' && req.method === 'POST') {
+      readJsonBody(req)
+        .then(async (payload) => {
+          const ttsConfig = loadTtsConfig();
+          const text = typeof payload?.text === 'string' ? payload.text : '';
+          if (!text.trim()) {
+            sendJson(res, 400, { error: 'empty_text' });
+            return;
+          }
+          const status = publicStatus(ttsConfig);
+          if (!status.ready) {
+            // A stated refusal, not a 500: the interface falls back to the
+            // browser voice and the operator is told which one is speaking.
+            sendJson(res, 503, { error: status.reason ?? 'tts_unavailable', fallback: ttsConfig.fallback });
+            return;
+          }
+
+          const controller = new AbortController();
+          req.on('aborted', () => controller.abort());
+          const result = await synthesize(text, ttsConfig, { signal: controller.signal });
+          if (!result.ok) {
+            if (result.code === 'aborted') {
+              res.destroy();
+              return;
+            }
+            sendJson(res, result.code === 'fish_rate_limited' ? 429 : 502, {
+              error: result.code,
+              detail: redact(result.detail ?? '', ttsConfig),
+              fallback: ttsConfig.fallback,
+            });
+            return;
+          }
+
+          res.writeHead(200, {
+            'content-type': result.contentType,
+            'cache-control': 'no-store',
+            // The interface shows which voice spoke; these are the same facts
+            // /api/voice/tts/status reports, and neither carries a secret.
+            'x-zero-tts-provider': 'fish_audio',
+            'x-zero-tts-model': result.model,
+          });
+          // Streamed through rather than buffered: a phone should not hold a
+          // whole answer's audio in the gateway as well as in the browser.
+          if (result.body && typeof result.body.getReader === 'function') {
+            const reader = result.body.getReader();
+            const pump = async () => {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (!res.write(Buffer.from(value))) {
+                  await new Promise((ready) => res.once('drain', ready));
+                }
+              }
+            };
+            await pump().catch(() => undefined);
+          }
+          res.end();
+        })
+        .catch((error) => {
+          sendJson(res, 500, { error: 'tts_failed', detail: redact(error?.message ?? '', {}) });
+        });
+      return;
     }
 
     if (url.pathname.startsWith(`${PUBLIC_API_BASE}/`)) {

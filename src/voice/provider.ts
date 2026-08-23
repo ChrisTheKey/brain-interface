@@ -10,7 +10,7 @@
  */
 import type { AudioLevels } from '../audio/analyser';
 
-export type VoiceProviderId = 'zero-realtime' | 'speech-synthesis' | 'none';
+export type VoiceProviderId = 'fish-audio' | 'zero-realtime' | 'speech-synthesis' | 'none';
 
 export interface VoiceSpeakOptions {
   signal?: AbortSignal;

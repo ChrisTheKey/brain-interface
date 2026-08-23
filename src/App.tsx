@@ -12,6 +12,7 @@ import { useZeroStatus } from './state/useZeroStatus';
 import { useChildAgents } from './state/useChildAgents';
 import { useVoiceTurn, visualStateForWake } from './state/useVoiceTurn';
 import { useWakeWord } from './state/useWakeWord';
+import { useTtsStatus } from './state/useTtsStatus';
 import { zeroNodeDescription, zeroNodeLabel, zeroNodeStatus } from './zero/connectionState';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
@@ -127,6 +128,8 @@ export default function App(): React.JSX.Element {
     language: config.speech.language,
   });
 
+  const tts = useTtsStatus();
+
   const selectedNode = useMemo(
     () => graph.nodes.find((node) => node.id === selectedId) ?? null,
     [graph, selectedId],
@@ -180,6 +183,7 @@ export default function App(): React.JSX.Element {
         }
         voiceState={brain.voiceState}
         wake={wake.enabled ? wake.diagnostics : null}
+        tts={tts}
         onRetry={() => {
           status.retry();
           childAgents.refresh();

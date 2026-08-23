@@ -15,6 +15,7 @@ import { onNetworkWake } from '../zero/lifecycle';
 import { ZeroDataAdapter, type ActivityEvent, type ZeroSnapshot } from '../zero/adapter';
 import type { ThreadStatus } from '../zero/protocol';
 import { ZeroVoiceService } from '../voice/service';
+import { FishAudioVoiceProvider } from '../voice/fishAudioProvider';
 import { ZeroRealtimeVoiceProvider } from '../voice/realtimeProvider';
 import { SpeechSynthesisVoiceProvider } from '../voice/speechSynthesisProvider';
 import { ZERO_VOICE_CHARACTER, type VoiceProvider } from '../voice/provider';
@@ -95,6 +96,16 @@ export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
     adapterRef.current = adapter;
 
     const providers: VoiceProvider[] = [];
+    /*
+      ZERO's cloud voice goes first when the gateway says it is configured.
+
+      Its `isAvailable()` asks the gateway rather than reading an environment
+      variable, because the only process that knows whether a Fish Audio key
+      exists is the one holding it. Not configured, switched off, or
+      ZERO_LOCAL_ONLY — any of those and the chain simply moves on to the
+      voices below, with the answer still on screen either way.
+    */
+    providers.push(new FishAudioVoiceProvider());
     if (config.voice.provider === 'zero-realtime') {
       providers.push(
         new ZeroRealtimeVoiceProvider({

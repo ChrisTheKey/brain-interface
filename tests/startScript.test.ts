@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -104,10 +105,10 @@ beforeAll(() => {
       { mode: 0o755 },
     );
   }
-  writeFileSync(
-    join(workspace, 'server', 'gateway.mjs'),
-    readFileSync(join(repoRoot, 'server', 'gateway.mjs'), 'utf8'),
-  );
+  // The whole server tree, not just gateway.mjs: the gateway imports its own
+  // modules now, and a fixture that copies one file starts a gateway that
+  // cannot resolve them — which looks exactly like the start script failing.
+  cpSync(join(repoRoot, 'server'), join(workspace, 'server'), { recursive: true });
   // A prebuilt bundle, so the script has nothing to build.
   writeFileSync(join(workspace, 'dist', 'index.html'), '<!doctype html><title>brain</title>');
   writeFileSync(join(workspace, 'index.html'), '<!doctype html>');

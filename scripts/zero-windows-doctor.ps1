@@ -290,6 +290,52 @@ if ($agentResult.Answered -and $agentResult.Body) {
     Warn 'the agent endpoint did not answer (is HWD-ZERO up?)'
 }
 
+# ------------------------------------------------------------------ voice out
+Group 'VOICE OUT (TTS)'
+# The key itself is never printed, echoed or length-reported. Only whether it
+# is there.
+$localOnly = @('1', 'true', 'yes', 'on') -contains ("$($env:ZERO_LOCAL_ONLY)".ToLower())
+$fishOn = @('1', 'true', 'yes', 'on') -contains ("$($env:FISH_AUDIO_ENABLED)".ToLower())
+if ($localOnly) {
+    Pass 'LOCAL-ONLY is ON - no cloud voice is called, whatever else is set'
+} elseif (-not $fishOn) {
+    Warn 'Fish Audio is NOT CONFIGURED - ZERO speaks with the browser voice'
+    Hint 'set FISH_AUDIO_ENABLED=true and FISH_API_KEY in .env.local'
+} else {
+    Pass 'Fish Audio is CONFIGURED'
+    if ($env:FISH_API_KEY) {
+        Pass 'API key PRESENT'
+    } else {
+        Fail 'API key MISSING'
+        Hint 'Fish Audio requires a Fish API key. Put FISH_API_KEY in .env.local (git-ignored).'
+    }
+    $model = $env:FISH_AUDIO_MODEL
+    if (-not $model) { $model = 's2.1-pro-free' }
+    if ($model -eq 's2.1-pro-free') {
+        Pass "free model $model selected"
+    } else {
+        # Nothing upgrades on its own; reaching a paid model takes writing one
+        # down, and the operator should know they did.
+        Warn "model $model is not the free tier - this one bills"
+    }
+    if ($env:FISH_AUDIO_VOICE_ID) {
+        $voiceName = $env:FISH_AUDIO_VOICE_NAME
+        if (-not $voiceName) { $voiceName = $env:FISH_AUDIO_VOICE_ID }
+        Pass "voice $voiceName"
+    } else {
+        Fail 'no voice configured'
+        Hint 'set FISH_AUDIO_VOICE_ID - see .env.example for two public ones'
+    }
+}
+$ttsReady = Get-ZeroHealthField -Url "http://127.0.0.1:$($config.UiPort)/api/voice/tts/status" -Field 'ready'
+if ($ttsReady -eq $true) {
+    Pass 'TTS READY - cloud (text is sent to Fish Audio)'
+} elseif ($ttsReady -eq $false) {
+    Warn 'TTS DEGRADED - the browser voice speaks instead'
+} else {
+    Warn 'the gateway did not answer /api/voice/tts/status'
+}
+
 # ------------------------------------------------------------------ resources
 Group 'RESOURCES'
 foreach ($dir in @($paths.RunDir, $paths.LogDir)) {

@@ -1081,3 +1081,42 @@ body,
     opacity: 0.8;
   }
 }
+
+/*
+  Where ZERO's voice comes from. Cloud is marked, not hidden: when the reply is
+  synthesised by a third party the operator should be able to see that without
+  opening anything.
+*/
+.zero-tts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.6rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.09em;
+  color: rgba(190, 206, 230, 0.6);
+}
+
+.zero-tts-label {
+  color: rgba(150, 170, 196, 0.55);
+}
+
+.zero-tts-cloud .zero-tts-mode {
+  color: rgba(255, 190, 120, 0.95);
+}
+
+.zero-tts-local .zero-tts-mode {
+  color: rgba(130, 220, 180, 0.9);
+}
+
+.zero-tts-voice {
+  color: rgba(214, 230, 250, 0.8);
+  letter-spacing: 0.04em;
+}
+
+.zero-tts-note {
+  flex-basis: 100%;
+  color: rgba(255, 190, 120, 0.7);
+  font-size: 0.58rem;
+}

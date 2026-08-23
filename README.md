@@ -199,6 +199,78 @@ ZERO-WORKSPACE/
 └── …
 ```
 
+## ZERO's voice: Fish Audio (optional, cloud)
+
+By default ZERO speaks with the browser's own synthesiser and nothing leaves
+the machine. Fish Audio is an opt-in upgrade that gives it a darker, measured,
+authoritative voice — at the cost of sending each reply to a third party.
+
+```bash
+# .env.local — git-ignored, read by the gateway, never by the browser
+FISH_AUDIO_ENABLED=true
+FISH_API_KEY=<your own key from fish.audio>
+FISH_AUDIO_MODEL=s2.1-pro-free
+FISH_AUDIO_VOICE_ID=306c68e5763b42d6b06fe0380daa5281
+FISH_AUDIO_VOICE_NAME=Lelouch Vi Britannia
+```
+
+**The key never reaches the browser.** There is deliberately no `VITE_FISH_*`
+anywhere: every `VITE_` value is compiled into the bundle a phone downloads.
+The browser POSTs the answer text to the gateway, the gateway holds the
+credential and calls `api.fish.audio`. A test asserts the built bundle
+contains neither the endpoint nor an Authorization header.
+
+**Only the answer goes out.** The request body is the sentence, the voice id
+and the parameters to say it — nothing else. No conversation history, no
+mission log, no agent registry, no memory, and never microphone audio. A test
+pins the exact field list, so adding anything to it fails the build.
+
+**Nothing bills without being asked.** `s2.1-pro-free` is the default. When the
+free tier says no, ZERO reports `FISH AUDIO FREE MODEL UNAVAILABLE` and falls
+back to the local voice; reaching `s2.1-pro` or `s2-pro` takes writing the
+model name down yourself.
+
+**The voices.** Two public Fish Audio community voices are shipped as known
+ids, both confirmed against the live model API as `public` and `trained`:
+
+| Voice | Id | Author |
+|---|---|---|
+| Lelouch Vi Britannia | `306c68e5763b42d6b06fe0380daa5281` | Universal |
+| Lelouch | `349b7618384141f780d21e119624783f` | Jatteks |
+
+Nothing here trains, uploads or clones a voice, and no audio was collected to
+build one. Any public Fish Audio voice id works — set `FISH_AUDIO_VOICE_ID`.
+
+**German is untested.** Both voices declare `languages: ["en"]` in their
+metadata. The model itself detects language and a reference voice is a timbre
+reference, so German may well work — but nobody here has heard it, and the
+interface does not claim otherwise. If it sounds wrong, pick another voice.
+
+**Local-only wins over everything.** `ZERO_LOCAL_ONLY=true` blocks the call
+even with a key present and the provider selected. The panel says
+`VOICE · CLOUD — FISH AUDIO` with `VOICE TEXT SENT TO FISH AUDIO` when the
+cloud voice is on, and `VOICE · LOCAL` when it is not. Neither is ever
+implied — it is read from the gateway.
+
+**It falls back rather than going silent.** Missing key, bad key, unknown
+voice, rate limit, timeout, unplayable audio, no network — each has a name and
+each hands the same sentence to the browser voice, with ZERO's answer on
+screen throughout. `scripts/zero-doctor.sh` and `zero-windows-doctor.ps1`
+report which one is speaking and why.
+
+The audio plays through the same `AnalyserNode` as every other voice, so the
+core, the filaments and the smoke react to ZERO's real output. Playback is
+buffered, not streamed: Fish Audio can stream and the gateway passes the
+stream through, but starting playback mid-download needs MediaSource with
+chunked MP3 appending, which is browser-specific and fails silently when it
+fails. A voice that starts half a second later beats one that sometimes never
+starts.
+
+Windows and Termux are identical here — the provider is plain Node in the
+gateway, with no platform-specific code. On Windows put the key in
+`.env.local` next to the checkout; the background gateway reads it there
+without a terminal.
+
 ## Hands-free: "Hey ZERO"
 
 Switch on `HEY ZERO` in the conversation bar and stop pressing anything:

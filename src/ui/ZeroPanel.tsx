@@ -9,6 +9,8 @@
 import type { ZeroStatusView } from '../state/useZeroStatus';
 import type { VoiceState } from '../voice/service';
 import type { WakeDiagnostics } from '../voice/wakeSession';
+import type { FishAudioStatus } from '../voice/fishAudioProvider';
+import { ttsSummary } from '../state/useTtsStatus';
 
 export interface ZeroPanelProps {
   status: ZeroStatusView;
@@ -23,6 +25,8 @@ export interface ZeroPanelProps {
   onRetry: () => void;
   /** Hands-free, when it is switched on. Null when it is not. */
   wake: WakeDiagnostics | null;
+  /** Which voice speaks, and whether it is a cloud one. */
+  tts: FishAudioStatus | null;
   /** Development diagnostics only; internal addresses never ship to the LAN. */
   showDiagnostics: boolean;
 }
@@ -42,6 +46,7 @@ export function ZeroPanel({
   voiceState,
   onRetry,
   wake,
+  tts,
   showDiagnostics,
 }: ZeroPanelProps): React.JSX.Element {
   const health = status.health;
@@ -148,6 +153,21 @@ export function ZeroPanel({
           Retry
         </button>
       ) : null}
+
+      {/*
+        Where ZERO's voice comes from, and — the part that matters — whether
+        saying it sends text to someone else. Compact by design: a permanent
+        dashboard for this would be ignored within a day, and this line has to
+        keep being read.
+      */}
+      <p className={`zero-tts zero-tts-${ttsSummary(tts).mode === 'LOCAL' ? 'local' : 'cloud'}`}>
+        <span className="zero-tts-label">VOICE</span>
+        <span className="zero-tts-mode">{ttsSummary(tts).mode}</span>
+        <span className="zero-tts-voice">{ttsSummary(tts).voice}</span>
+        {ttsSummary(tts).note ? (
+          <span className="zero-tts-note">{ttsSummary(tts).note}</span>
+        ) : null}
+      </p>
 
       {wake ? (
         <details className="zero-diagnostics">
