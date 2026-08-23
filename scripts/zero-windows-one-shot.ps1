@@ -474,15 +474,21 @@ Step 'DIAGNOSIS'
 $doctorExit = $LASTEXITCODE
 
 # ----------------------------------------------------------------- 18 verdict
+# The block goes last, after the doctor's hundred lines rather than before
+# them: whatever scrolled past, the final screen is the one that says what is
+# actually running. It is measured here a second time, deliberately - the
+# start script printed one too, and between then and now the doctor has been
+# talking to a runtime that may have fallen over in the meantime.
+$summary = Get-ZeroRuntimeSummary -Config $config -Paths $paths
+Write-ZeroReadyBlock -Summary $summary
+
 Write-Host ''
-Write-Host 'ONE-SHOT COMPLETE' -ForegroundColor White
-Write-Host "  interface  $($config.InterfaceUrl)"
 Write-Host "  status     powershell -NoProfile -File `"$(Join-Path $PSScriptRoot 'zero-windows-status.ps1')`""
 Write-Host "  doctor     powershell -NoProfile -File `"$(Join-Path $PSScriptRoot 'zero-windows-doctor.ps1')`""
 Write-Host "  stop       powershell -NoProfile -File `"$(Join-Path $PSScriptRoot 'zero-windows-stop.ps1')`""
 Write-Host "  logs       $($paths.LogDir)"
 
-if ($startExit -ne 0 -or $doctorExit -ne 0) {
+if ($startExit -ne 0 -or $doctorExit -ne 0 -or -not $summary.Online) {
     Write-Host ''
     Write-Host 'Something above is not right. The tails are printed with the failure;' -ForegroundColor Yellow
     Write-Host 'zero-windows-doctor names the remedy for each.' -ForegroundColor Yellow

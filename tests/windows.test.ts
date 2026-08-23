@@ -639,4 +639,84 @@ withPowerShell('the doctor', () => {
     expect(source).toMatch(/browser microphone support cannot be tested from PowerShell/);
     expect(source).toMatch(/Info 'browser microphone/);
   });
+
+  it('prints every section heading it defines', () => {
+    // This caught a real one. The helper was called `Group`, and `Group` is a
+    // built-in alias for `Group-Object`: aliases beat functions in PowerShell's
+    // resolution order, so every heading was quietly swallowed by a cmdlet that
+    // groups nothing and returns nothing. The script "worked" and the operator
+    // saw a wall of undifferentiated PASS lines. Reading the source could not
+    // have found it - only running it could.
+    const result = spawnSync(powershell!, ['-NoProfile', '-File', join(scriptsDir, 'zero-windows-doctor.ps1')], {
+      encoding: 'utf8',
+      cwd: repoRoot,
+      timeout: TIMEOUT,
+      env: { ...process.env, ZERO_UI_PORT: String(freePort()), ZERO_API_URL: `http://127.0.0.1:${freePort()}` },
+    });
+    const output = `${result.stdout}`;
+    for (const heading of [
+      'PLATFORM',
+      'TOOLCHAIN',
+      'REPOSITORIES',
+      'PORTS',
+      'RUN STATE',
+      'SERVING',
+      'VOICE',
+      'CONVERSATION',
+      'AGENTS',
+      'RESOURCES',
+    ]) {
+      expect(output).toMatch(new RegExp(`^${heading}`, 'm'));
+    }
+  }, TIMEOUT);
+
+  it('reports the conversation loop without holding a conversation', () => {
+    // The doctor may not prompt the runtime to prove it can answer: that
+    // writes a transcript and an audit entry, and a diagnosis that changes
+    // what it measures is not a diagnosis. So the links are checked for
+    // presence - brain, reasoner, transcript - and never exercised.
+    const source = code('zero-windows-doctor.ps1');
+    expect(source).toContain("Section 'CONVERSATION'");
+    expect(source).toMatch(/api\/runtime/);
+    expect(source).toMatch(/api\/voice\/transcript/);
+    expect(source).toMatch(/CONVERSATION READY/);
+    expect(source).toMatch(/CONVERSATION DEGRADED/);
+    // Reads only. A POST here would be the runtime being made to talk.
+    expect(source).not.toMatch(/-Method\s+'?Post/i);
+  });
+});
+
+withPowerShell('names that PowerShell would quietly steal', () => {
+  it('defines no function that a built-in alias shadows', () => {
+    // The `Group`/`Group-Object` collision cost a whole set of headings and
+    // raised no error of any kind. Every helper in every script is checked
+    // against the alias table, because the failure mode is silence.
+    const probe = join(scratch('zero-alias-'), 'probe.ps1');
+    writeFileSync(
+      probe,
+      [
+        '$collisions = @()',
+        `foreach ($f in Get-ChildItem -LiteralPath "${scriptsDir.replace(/\\/g, '\\\\')}" -Filter *.ps1) {`,
+        '  $errors = $null; $tokens = $null',
+        '  $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors)',
+        '  $found = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)',
+        '  foreach ($fn in $found) {',
+        '    $alias = Get-Alias -Name $fn.Name -ErrorAction SilentlyContinue',
+        '    if ($alias) { $collisions += "$($f.Name): $($fn.Name) -> $($alias.ResolvedCommandName)" }',
+        '  }',
+        '}',
+        'Write-Output ("<<<" + (($collisions | ConvertTo-Json -Compress -Depth 3)) + ">>>")',
+      ].join('\n'),
+    );
+    const result = spawnSync(powershell!, ['-NoProfile', '-File', probe], {
+      encoding: 'utf8',
+      cwd: repoRoot,
+      timeout: TIMEOUT,
+    });
+    const match = /<<<([\s\S]*?)>>>/.exec(result.stdout ?? '');
+    expect(match, `no output from PowerShell: ${result.stdout} ${result.stderr}`).toBeTruthy();
+    const raw = match![1]!.trim();
+    const collisions = raw && raw !== 'null' ? JSON.parse(raw) : [];
+    expect(collisions).toEqual([]);
+  }, TIMEOUT);
 });

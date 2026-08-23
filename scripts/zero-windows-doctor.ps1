@@ -27,7 +27,7 @@ function Warn { param([string]$Text) Write-Host "  WARN  $Text" -ForegroundColor
 function Fail { param([string]$Text) Write-Host "  FAIL  $Text" -ForegroundColor Red; $script:Failures++ }
 function Info { param([string]$Text) Write-Host "  INFO  $Text" -ForegroundColor Cyan }
 function Hint { param([string]$Text) Write-Host "        $Text" -ForegroundColor DarkGray }
-function Group { param([string]$Text) Write-Host ''; Write-Host $Text -ForegroundColor White }
+function Section { param([string]$Text) Write-Host ''; Write-Host $Text -ForegroundColor White }
 
 $paths = Get-ZeroPaths
 $config = Get-ZeroConfig -Root $paths.Root
@@ -39,7 +39,7 @@ Write-Host "  workspace  $($paths.Workspace)"
 Write-Host "  runtime    $($paths.RuntimeDir)"
 
 # ------------------------------------------------------------------ platform
-Group 'PLATFORM'
+Section 'PLATFORM'
 if (Test-ZeroIsWindows) {
     $caption = 'Windows'
     try {
@@ -61,7 +61,7 @@ if ($psVersion.Major -ge 5) {
 }
 
 # ----------------------------------------------------------------- toolchain
-Group 'TOOLCHAIN'
+Section 'TOOLCHAIN'
 foreach ($tool in @(
         @{ Name = 'git'; Command = 'git'; Args = @('--version'); Required = $true; Winget = 'Git.Git' },
         @{ Name = 'node'; Command = 'node'; Args = @('-v'); Required = $true; Winget = 'OpenJS.NodeJS.LTS' },
@@ -100,7 +100,7 @@ if ($python) {
 }
 
 # ---------------------------------------------------------------- checkouts
-Group 'REPOSITORIES'
+Section 'REPOSITORIES'
 foreach ($repo in @(
         @{ Name = 'brain-interface'; Path = $paths.Root; Marker = 'package.json' },
         @{ Name = 'HWD-ZERO'; Path = $paths.RuntimeDir; Marker = 'zero' }
@@ -139,7 +139,7 @@ if (Test-Path -LiteralPath (Join-Path $paths.Root 'node_modules')) {
 }
 
 # --------------------------------------------------------------------- ports
-Group 'PORTS'
+Section 'PORTS'
 foreach ($entry in @(
         @{ Name = 'interface'; Port = $config.UiPort; PidFile = $paths.GatewayPid },
         @{ Name = 'hwd-zero'; Port = $config.ApiPort; PidFile = $paths.ZeroPid }
@@ -170,7 +170,7 @@ foreach ($entry in @(
 }
 
 # ----------------------------------------------------------------- run state
-Group 'RUN STATE'
+Section 'RUN STATE'
 foreach ($entry in @(
         @{ Name = 'gateway'; Path = $paths.GatewayPid },
         @{ Name = 'hwd-zero'; Path = $paths.ZeroPid },
@@ -188,7 +188,7 @@ foreach ($entry in @(
 }
 
 # ------------------------------------------------------------------- serving
-Group 'SERVING'
+Section 'SERVING'
 if (Test-ZeroHttp -Url $config.HealthUrl) {
     Pass "gateway answers $($config.HealthUrl)"
     $gatewayState = Get-ZeroHealthField -Url $config.HealthUrl -Field 'gateway'
@@ -219,7 +219,7 @@ switch ($stream.Level) {
 }
 
 # --------------------------------------------------------------------- voice
-Group 'VOICE'
+Section 'VOICE'
 $whisper = Get-ZeroWhisperBinary
 if ($whisper) {
     $probe = Test-ZeroWhisperBinary -Path $whisper
@@ -273,8 +273,81 @@ if ($voiceResult.Answered -and $voiceResult.Body) {
 Info 'browser microphone support cannot be tested from PowerShell'
 Hint "open $($config.InterfaceUrl) in Chrome or Edge and allow the microphone once"
 
+# --------------------------------------------------------------- conversation
+Section 'CONVERSATION'
+# Whether ZERO could hold a turn if one were sent - asked, never tried. A
+# doctor that prompted the runtime to prove itself would write an audit entry
+# and a transcript on every run, and a diagnosis that changes what it measures
+# is not a diagnosis. So each link in the loop is checked for presence
+# instead: the brain that supplies the answer, the reasoner that forms it,
+# and the transcript endpoint that records it.
+$runtimeResult = Invoke-ZeroHttp -Url "http://127.0.0.1:$($config.UiPort)/api/runtime"
+$brainReady = $false
+if ($runtimeResult.Answered -and $runtimeResult.Body) {
+    try {
+        $runtimePayload = $runtimeResult.Body | ConvertFrom-Json
+        if ($runtimePayload.ready -eq $true) {
+            $brainReady = $true
+            Pass "$($runtimePayload.name) ready - brain $($runtimePayload.brain_revision), $($runtimePayload.sources) sources"
+        } else {
+            # A process on the port is not a runtime. An unassembled brain
+            # answers every turn with nothing, which reads as ZERO ignoring you.
+            Warn "$($runtimePayload.name) is not ready - brain $($runtimePayload.brain_revision), $($runtimePayload.sources) sources"
+            Hint "check $($paths.ZeroLog) for what the brain failed to load"
+        }
+        $roles = @($runtimePayload.roles)
+        if ($roles.Count -gt 0) { Info "roles: $($roles -join ', ')" }
+    } catch {
+        Warn 'the runtime endpoint answered with something unreadable'
+    }
+} else {
+    Warn "the runtime endpoint did not answer (is HWD-ZERO up?)"
+    Hint '.\scripts\zero-windows-start.ps1'
+}
+
+$reasonerId = ''
+if ($voiceResult.Answered -and $voiceResult.Body) {
+    try {
+        $reasonPayload = $voiceResult.Body | ConvertFrom-Json
+        if ($reasonPayload.reasoning) {
+            $reasonerId = [string]$reasonPayload.reasoning.provider
+            if ($reasonPayload.reasoning.available -eq $true) {
+                Pass "reasoning provider available: $reasonerId"
+            } else {
+                Warn "reasoning provider $reasonerId is configured but not available"
+            }
+        }
+    } catch { }
+}
+if (-not $reasonerId) {
+    Warn 'no reasoning provider is reachable - ZERO would hear you and answer nothing'
+    Hint 'the provider is HWD-ZERO configuration; this script adds no credentials of its own'
+}
+
+$transcriptResult = Invoke-ZeroHttp -Url "http://127.0.0.1:$($config.UiPort)/api/voice/transcript"
+$transcriptOk = $false
+if ($transcriptResult.Answered -and $transcriptResult.Body) {
+    try {
+        $transcriptPayload = $transcriptResult.Body | ConvertFrom-Json
+        $turns = @($transcriptPayload.transcripts).Count
+        $transcriptOk = $true
+        # Zero turns is the normal state of a fresh start, not a fault.
+        Pass "transcript history reachable ($turns turns recorded)"
+    } catch {
+        Warn 'the transcript endpoint answered with something unreadable'
+    }
+} else {
+    Warn 'the transcript endpoint did not answer - turns would not be recorded'
+}
+
+if ($brainReady -and $reasonerId -and $transcriptOk) {
+    Pass 'CONVERSATION READY - text in, reasoning, answer out'
+} else {
+    Warn 'CONVERSATION DEGRADED - the links above marked WARN are the missing ones'
+}
+
 # --------------------------------------------------------------------- agents
-Group 'AGENTS'
+Section 'AGENTS'
 $agentResult = Invoke-ZeroHttp -Url "http://127.0.0.1:$($config.UiPort)/api/agents/children"
 if ($agentResult.Answered -and $agentResult.Body) {
     try {
@@ -291,7 +364,7 @@ if ($agentResult.Answered -and $agentResult.Body) {
 }
 
 # ------------------------------------------------------------------ voice out
-Group 'VOICE OUT (TTS)'
+Section 'VOICE OUT (TTS)'
 # The key itself is never printed, echoed or length-reported. Only whether it
 # is there.
 $localOnly = @('1', 'true', 'yes', 'on') -contains ("$($env:ZERO_LOCAL_ONLY)".ToLower())
@@ -337,7 +410,7 @@ if ($ttsReady -eq $true) {
 }
 
 # ------------------------------------------------------------------ resources
-Group 'METRICOOL MCP'
+Section 'METRICOOL MCP'
 $metricoolUrl = "http://127.0.0.1:$($config.UiPort)/api/integrations/metricool/status"
 $metricoolResult = Invoke-ZeroHttp -Url $metricoolUrl
 if (-not $metricoolResult.Answered) {
@@ -388,7 +461,7 @@ if ($env:ZERO_LOCAL_ONLY -eq 'true') {
     Info 'LOCAL ONLY OFF'
 }
 
-Group 'META ADS MCP'
+Section 'META ADS MCP'
 $metaUrl = "http://127.0.0.1:$($config.UiPort)/api/integrations/meta-ads/status"
 $metaResult = Invoke-ZeroHttp -Url $metaUrl
 if (-not $metaResult.Answered) {
@@ -442,7 +515,7 @@ if (-not $metaResult.Answered) {
     }
 }
 
-Group 'RESOURCES'
+Section 'RESOURCES'
 foreach ($dir in @($paths.RunDir, $paths.LogDir)) {
     $writable = $false
     try {
