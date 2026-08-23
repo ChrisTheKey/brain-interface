@@ -1319,3 +1319,141 @@ body,
   background: transparent !important;
   color: var(--ink-dim) !important;
 }
+
+/* ----------------------------------------------------------------- meta ads
+
+   Five lines and a button. Meta's own Ads Manager is the dashboard.
+
+   READ and MANAGE are separate rows on purpose: Meta rolls this out by
+   account and a login can read without being able to spend, so one CONNECTED
+   line would imply ZERO could change an account it can only look at.
+*/
+.meta-ads {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+}
+
+.meta-ads-connect,
+.meta-ads-toggle,
+.meta-ads-disconnect {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.meta-ads-connect {
+  width: 100%;
+  border-color: rgba(255, 190, 170, 0.5);
+  color: rgba(255, 226, 214, 0.95);
+}
+
+.meta-ads-toggle,
+.meta-ads-disconnect {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.meta-ads-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meta-ads-accounts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.meta-ads-accounts button {
+  padding: 2px 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.meta-ads-accounts button.selected {
+  border-color: rgba(255, 190, 170, 0.6);
+  color: rgba(255, 226, 214, 0.95);
+}
+
+/* ------------------------------------------------------- ads approval
+
+   The gate that spends money. It renders the whole payload, and the two
+   lines that matter most are the delivery state and, on a mutation, the old
+   value beside the new one.
+*/
+.ads-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 170, 140, 0.25);
+}
+
+.ads-money {
+  color: rgba(255, 214, 190, 0.98);
+  font-variant-numeric: tabular-nums;
+}
+
+.ads-old {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+  font-variant-numeric: tabular-nums;
+}
+
+.ads-creative {
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 170, 140, 0.2);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.ads-category {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 210, 170, 0.9);
+}
+
+.ads-delivering,
+.ads-paused {
+  margin: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ads-delivering {
+  border: 1px solid rgba(255, 150, 120, 0.6);
+  background: rgba(255, 110, 80, 0.16);
+  color: rgba(255, 224, 212, 0.98);
+}
+
+.ads-paused {
+  border: 1px solid var(--panel-border);
+  color: var(--ink-dim);
+}

@@ -17,7 +17,10 @@ import { ZERO_EVENTS_WS_PATH, apiPath, sameOriginWsUrl } from '../zero/endpoints
 import type {
   ApprovalTicket,
   ChildAgentDiscovery,
+  AdsOutcome,
+  AdsPlanView,
   GatewayHealth,
+  MetaAdsStatus,
   MetricoolStatus,
   OperatorApproval,
   OperatorEvent,
@@ -264,6 +267,73 @@ export class HwdZeroClient {
   /** What one publish actually did. */
   socialOutcome(planId: string): Promise<SocialOutcome> {
     return this.get(`/api/social/plans/${encodeURIComponent(planId)}`);
+  }
+
+  // --------------------------------------------------------------- meta ads
+
+  /** Connected, which accounts, rollout, readiness. Never a token. */
+  metaAdsStatus(): Promise<MetaAdsStatus> {
+    return this.get('/api/integrations/meta-ads/status');
+  }
+
+  /** Start the Meta Business OAuth. The verifier stays in the runtime. */
+  metaAdsConnect(): Promise<{ authorization_url: string; state: string }> {
+    return this.post('/api/integrations/meta-ads/connect', {});
+  }
+
+  metaAdsDisconnect(): Promise<{ connected: boolean }> {
+    return this.post('/api/integrations/meta-ads/disconnect', {});
+  }
+
+  /** Choose the ad account. Never chosen at random when several exist. */
+  selectAdAccount(account: string): Promise<{ selected: { id: string; label: string } }> {
+    return this.post('/api/integrations/meta-ads/account', { account });
+  }
+
+  /**
+   * Real numbers from Meta. Read-only, so no gate: looking at what an account
+   * already spent changes nothing and shows nobody anything.
+   */
+  adsInsights(request: {
+    account?: string;
+    date_preset?: string;
+    level?: string;
+    time_range?: { since: string; until: string };
+    entity_id?: string;
+  }): Promise<{ rows: Record<string, unknown>[]; count: number; source: string }> {
+    return this.post('/api/ads/insights', request);
+  }
+
+  /** Everything an audit needs, gathered. Recommends nothing by itself. */
+  adsAudit(request: { account?: string; date_preset?: string }): Promise<Record<string, unknown>> {
+    return this.post('/api/ads/audit', request);
+  }
+
+  /**
+   * Build a campaign structure and stop on the gate. Nothing reaches Meta
+   * here — the reply is a preview and a pending approval.
+   */
+  prepareCampaign(request: Record<string, unknown>): Promise<{
+    plan: AdsPlanView;
+    approval: OperatorApproval;
+    state: string;
+    summary: string;
+  }> {
+    return this.post('/api/ads/campaign/prepare', request);
+  }
+
+  /** Pause, activate, change a budget. Same gate, same binding. */
+  prepareAdsMutation(request: Record<string, unknown>): Promise<{
+    plan: AdsPlanView;
+    approval: OperatorApproval;
+    state: string;
+    summary: string;
+  }> {
+    return this.post('/api/ads/mutation/prepare', request);
+  }
+
+  adsOutcome(planId: string): Promise<AdsOutcome> {
+    return this.get(`/api/ads/plans/${encodeURIComponent(planId)}`);
   }
 
   /** The kill switch. On refuses every execution until a human turns it off. */

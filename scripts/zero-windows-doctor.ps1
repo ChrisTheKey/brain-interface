@@ -388,6 +388,60 @@ if ($env:ZERO_LOCAL_ONLY -eq 'true') {
     Info 'LOCAL ONLY OFF'
 }
 
+Group 'META ADS MCP'
+$metaUrl = "http://127.0.0.1:$($config.UiPort)/api/integrations/meta-ads/status"
+$metaResult = Invoke-ZeroHttp -Url $metaUrl
+if (-not $metaResult.Answered) {
+    Warn "the runtime did not answer $metaUrl"
+    Hint 'start ZERO first; this reads the live integration, not a config file'
+} else {
+    try {
+        $meta = $metaResult.Body | ConvertFrom-Json
+        if ($meta.blocked_by -eq 'local_only') {
+            Pass 'LOCAL ONLY is ON - Meta Ads is BLOCKED and no socket is opened'
+        } elseif ($meta.blocked_by -eq 'meta_disabled') {
+            Warn 'DISCONNECTED - the integration is switched off (ZERO_META_ADS_ENABLED)'
+        } elseif ($meta.connected -eq $true) {
+            Pass "CONNECTED - $($meta.endpoint)"
+            Pass "AUTH READY - $($meta.provider)"
+            switch ($meta.rollout) {
+                'available' { Pass 'MCP ROLLOUT ENABLED' }
+                'disabled'  { Warn "MCP ROLLOUT DISABLED - $($meta.rollout_detail)" }
+                default     { Warn 'MCP ROLLOUT UNKNOWN - Meta did not report is_ads_mcp_enabled' }
+            }
+            $accounts = [int]$meta.accounts
+            if ($accounts -gt 0) {
+                Pass "AD ACCOUNTS $accounts (using $($meta.selected_account))"
+            } else {
+                Warn 'AD ACCOUNTS 0 - this login reaches no ad account'
+            }
+            $readTools = @($meta.capabilities.read_tools).Count
+            $writeTools = @($meta.capabilities.write_tools).Count
+            Info "READ TOOLS $readTools, WRITE TOOLS $writeTools"
+            if ($meta.read_ready -eq $true) {
+                Pass 'READINESS READ - analysis is autonomous'
+            } else {
+                Warn "READ NOT READY - $($meta.reason)"
+            }
+            if ($meta.mutation_ready -eq $true) {
+                Pass 'READINESS WRITE - every change still stops at an approval'
+            } else {
+                Warn "WRITE NOT READY - $($meta.mutation_reason)"
+            }
+            if ($meta.budget_guard.max_daily) {
+                Pass "spend ceiling: $($meta.budget_guard.max_daily) per day"
+            } else {
+                Warn 'no META_ADS_MAX_DAILY_BUDGET - approvals are unbounded in amount'
+            }
+        } else {
+            Warn 'AUTH REQUIRED - nobody has signed in to Meta yet'
+            Hint 'open the interface and press CONNECT META ADS; no token goes in a file by hand'
+        }
+    } catch {
+        Warn "the Meta Ads status could not be read: $($_.Exception.Message)"
+    }
+}
+
 Group 'RESOURCES'
 foreach ($dir in @($paths.RunDir, $paths.LogDir)) {
     $writable = $false

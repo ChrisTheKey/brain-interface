@@ -22,6 +22,10 @@ export type NodeType =
   | 'socialHub'
   /** One social network ZERO can actually publish to, from the real brand. */
   | 'socialNetwork'
+  /** Paid advertising, as one node between ZERO and the ad platform. */
+  | 'adsHub'
+  /** One ad account ZERO can actually reach. */
+  | 'adsAccount'
   | 'toolDependency';
 
 export type NodeStatus = 'active' | 'idle' | 'error' | 'notLoaded' | 'disabled' | 'unknown';
@@ -61,7 +65,11 @@ export type EdgeRelationship =
   /** ZERO → the publishing integration. */
   | 'publishes'
   /** The integration → one network it is really connected to. */
-  | 'network';
+  | 'network'
+  /** ZERO → the advertising integration. */
+  | 'advertises'
+  /** The integration → one ad account it can really reach. */
+  | 'adAccount';
 
 export interface GraphEdge {
   id: string;
@@ -85,6 +93,11 @@ export function threadNodeId(threadId: string): string {
 }
 
 export const SOCIAL_NODE_ID = 'social:metricool';
+export const ADS_NODE_ID = 'ads:meta';
+
+export function adsAccountNodeId(account: string): string {
+  return `ads:account:${account}`;
+}
 
 export function socialNetworkNodeId(network: string): string {
   return `social:network:${network}`;

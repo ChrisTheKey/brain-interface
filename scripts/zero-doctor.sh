@@ -268,6 +268,55 @@ else
   hint "open the interface and press CONNECT METRICOOL; no token goes in a file by hand"
 fi
 
+# ---------------------------------------------------------------- meta ads
+
+group "META ADS MCP"
+META_URL="http://127.0.0.1:$ZERO_UI_PORT/api/integrations/meta-ads/status"
+META_CONNECTED="$(zero_health_field "$META_URL" connected)"
+META_BLOCKED="$(zero_health_field "$META_URL" blocked_by)"
+if [ -z "$META_CONNECTED" ]; then
+  warn "the runtime did not answer $META_URL"
+  hint "start ZERO first; this reads the live integration, not a config file"
+elif [ "$META_BLOCKED" = "local_only" ]; then
+  pass "LOCAL ONLY is ON - Meta Ads is BLOCKED and no socket is opened"
+elif [ "$META_BLOCKED" = "meta_disabled" ]; then
+  warn "DISCONNECTED - the integration is switched off (ZERO_META_ADS_ENABLED)"
+elif [ "$META_CONNECTED" = "true" ]; then
+  pass "CONNECTED - $(zero_health_field "$META_URL" endpoint)"
+  pass "AUTH READY - $(zero_health_field "$META_URL" provider)"
+  META_ROLLOUT="$(zero_health_field "$META_URL" rollout)"
+  case "$META_ROLLOUT" in
+    available) pass "MCP ROLLOUT ENABLED" ;;
+    disabled)  warn "MCP ROLLOUT DISABLED - Meta has not switched this account on yet" ;;
+    *)         warn "MCP ROLLOUT UNKNOWN - Meta did not report is_ads_mcp_enabled" ;;
+  esac
+  META_ACCOUNTS="$(zero_health_field "$META_URL" accounts)"
+  case "$META_ACCOUNTS" in
+    ""|0) warn "AD ACCOUNTS 0 - this login reaches no ad account" ;;
+    *)    pass "AD ACCOUNTS $META_ACCOUNTS (using $(zero_health_field "$META_URL" selected_account))" ;;
+  esac
+  if [ "$(zero_health_field "$META_URL" read_ready)" = "true" ]; then
+    pass "READINESS READ - analysis is autonomous"
+  else
+    warn "READ NOT READY - $(zero_health_field "$META_URL" reason)"
+  fi
+  if [ "$(zero_health_field "$META_URL" mutation_ready)" = "true" ]; then
+    pass "READINESS WRITE - every change still stops at an approval"
+  else
+    warn "WRITE NOT READY - $(zero_health_field "$META_URL" mutation_reason)"
+  fi
+else
+  warn "AUTH REQUIRED - nobody has signed in to Meta yet"
+  hint "open the interface and press CONNECT META ADS; no token goes in a file by hand"
+fi
+if [ -n "${META_ADS_MAX_DAILY_BUDGET:-}" ]; then
+  pass "spend ceiling: META_ADS_MAX_DAILY_BUDGET=$META_ADS_MAX_DAILY_BUDGET"
+else
+  # Not a failure. Unset means every spend still stops at a human; it only
+  # means no ceiling bounds how much one approval can cost.
+  warn "no META_ADS_MAX_DAILY_BUDGET - approvals are unbounded in amount"
+fi
+
 # ------------------------------------------------------------------- state
 
 group "STATE"

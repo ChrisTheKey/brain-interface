@@ -1,4 +1,9 @@
-import type { OperatorApproval, OperatorMission, SocialPlanView } from '../hwd/types';
+import type {
+  AdsPlanView,
+  OperatorApproval,
+  OperatorMission,
+  SocialPlanView,
+} from '../hwd/types';
 import type { OperatorView } from '../state/useOperator';
 
 /**
@@ -126,6 +131,168 @@ function PublishPreview({ plan }: { plan: SocialPlanView }): React.JSX.Element {
   );
 }
 
+function money(value: unknown): string {
+  return typeof value === 'string' && value ? value : '—';
+}
+
+/**
+ * What is about to happen to a real ad account, with real money on it.
+ *
+ * A mutation shows OLD beside NEW, because "CHF 50/day" means nothing to a
+ * person until they see the CHF 30 it replaces — and the runtime binds both
+ * into the digest, so approving 30→50 is not approval to set 50 on something
+ * that has since become 200.
+ *
+ * A creation shows the whole structure and, at the bottom, whether the thing
+ * will deliver. That line is the one that costs money.
+ */
+function AdsPreview({ plan }: { plan: AdsPlanView }): React.JSX.Element {
+  const creating = plan.action === 'create';
+  const targeting = plan.ad_set?.targeting;
+  const where = targeting
+    ? [...targeting.cities, ...targeting.regions, ...targeting.countries].join(', ')
+    : '';
+  return (
+    <div className="ads-preview">
+      <dl className="publish-facts">
+        <div>
+          <dt>Action</dt>
+          <dd>{plan.action.toUpperCase()}</dd>
+        </div>
+        <div>
+          <dt>Ad account</dt>
+          <dd>{plan.account.label}</dd>
+        </div>
+        {creating ? (
+          <>
+            <div>
+              <dt>Campaign</dt>
+              <dd>{plan.campaign?.name}</dd>
+            </div>
+            <div>
+              <dt>Objective</dt>
+              <dd>{plan.campaign?.objective}</dd>
+            </div>
+            <div>
+              <dt>Daily budget</dt>
+              <dd className="ads-money">
+                {money(plan.ad_set?.daily_budget_display ?? plan.campaign?.daily_budget_display)}
+              </dd>
+            </div>
+            {plan.ad_set?.lifetime_budget_display ? (
+              <div>
+                <dt>Lifetime budget</dt>
+                <dd className="ads-money">{plan.ad_set.lifetime_budget_display}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>Locations</dt>
+              <dd>
+                {where || 'not stated'}
+                {targeting?.radius_km ? ` +${targeting.radius_km}km` : ''}
+              </dd>
+            </div>
+            <div>
+              <dt>Audience</dt>
+              <dd>
+                {targeting?.age_min || targeting?.age_max
+                  ? `${targeting.age_min || 18}–${targeting.age_max || 65}`
+                  : 'Meta default'}
+                {targeting?.languages.length ? ` · ${targeting.languages.join('/')}` : ''}
+              </dd>
+            </div>
+            <div>
+              <dt>Placements</dt>
+              <dd>{plan.ad_set?.placements.join(', ') || 'automatic'}</dd>
+            </div>
+            <div>
+              <dt>Optimization</dt>
+              <dd>{plan.ad_set?.optimization_goal || 'Meta default'}</dd>
+            </div>
+            <div>
+              <dt>Schedule</dt>
+              <dd>
+                {plan.ad_set?.start_time || 'immediately when activated'}
+                {plan.ad_set?.timezone ? ` · ${plan.ad_set.timezone}` : ''}
+              </dd>
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <dt>Object</dt>
+              <dd>
+                {plan.entity?.label || plan.entity?.id} ({plan.entity?.type})
+              </dd>
+            </div>
+            <div>
+              <dt>Old</dt>
+              <dd className="ads-old">
+                {money(plan.before?.['daily_budget_display']) !== '—'
+                  ? money(plan.before?.['daily_budget_display'])
+                  : String(plan.before?.['status'] ?? '—')}
+              </dd>
+            </div>
+            <div>
+              <dt>New</dt>
+              <dd className="ads-money">
+                {money(plan.after?.['daily_budget_display']) !== '—'
+                  ? money(plan.after?.['daily_budget_display'])
+                  : String(plan.after?.['status'] ?? '—')}
+              </dd>
+            </div>
+          </>
+        )}
+        <div>
+          <dt>Risk</dt>
+          <dd className="publish-risk">PAID ADVERTISING</dd>
+        </div>
+      </dl>
+
+      {plan.campaign?.special_ad_categories.length ? (
+        <p className="ads-category">
+          Special ad categories: {plan.campaign.special_ad_categories.join(', ')}
+        </p>
+      ) : null}
+
+      {creating && plan.creative ? (
+        <div className="ads-creative">
+          <span className="publish-network">{plan.creative.headline}</span>
+          <p className="publish-text">{plan.creative.primary_text}</p>
+          {plan.creative.call_to_action ? (
+            <span className="publish-shortened">
+              {plan.creative.call_to_action} → {plan.creative.link}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/*
+        The line that costs money. Creation lands paused where Meta supports
+        it, and activating is a separate approval — so this says which of the
+        two the operator is about to authorise.
+      */}
+      {creating ? (
+        <p className={plan.activates ? 'ads-delivering' : 'ads-paused'}>
+          {plan.activates
+            ? 'DELIVERS IMMEDIATELY — this approval includes activation'
+            : 'CREATED PAUSED — activating is a separate approval'}
+        </p>
+      ) : null}
+
+      {plan.warnings.length > 0 ? (
+        <ul className="publish-blocked">
+          {plan.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      <p className="publish-digest">bound to {plan.digest.slice(0, 12)}</p>
+    </div>
+  );
+}
+
 function ApprovalGate({
   approval,
   onApprove,
@@ -138,9 +305,13 @@ function ApprovalGate({
   busy: boolean;
 }): React.JSX.Element {
   const publish = approval.gate === 'external_publish';
+  const advertising = approval.gate === 'paid_advertising';
+  // Both kinds bind an approval to an exact payload; what differs is what the
+  // payload is and what it costs if it is wrong.
+  const irreversible = publish || advertising;
   const plan = approval.preview;
   return (
-    <article className={publish ? 'approval approval-publish' : 'approval'}>
+    <article className={irreversible ? 'approval approval-publish' : 'approval'}>
       <h3>
         {approval.gate.replace(/_/g, ' ')}
         <span className="approval-mission">{shortMissionId(approval.mission_id)}</span>
@@ -148,7 +319,8 @@ function ApprovalGate({
       <p className="approval-objective">{approval.objective}</p>
       {approval.reason ? <p className="approval-reason">{approval.reason}</p> : null}
       {approval.rationale ? <p className="approval-rationale">{approval.rationale}</p> : null}
-      {publish && plan ? <PublishPreview plan={plan} /> : null}
+      {publish && plan ? <PublishPreview plan={plan as SocialPlanView} /> : null}
+      {advertising && plan ? <AdsPreview plan={plan as AdsPlanView} /> : null}
       <div className="approval-actions">
         <button type="button" onClick={() => onApprove(approval)} disabled={busy}>
           Approve once
@@ -161,15 +333,17 @@ function ApprovalGate({
           should be able to say *no* and have it dropped rather than leave it
           for whoever clicks next.
         */}
-        {publish ? (
+        {irreversible ? (
           <button type="button" className="approval-deny" onClick={() => onDeny(approval)}>
             Deny
           </button>
         ) : null}
         <span className="approval-note">
-          {publish
-            ? 'This exact post, once. Editing it afterwards needs a new approval.'
-            : 'One mission, one gate. Not a permission — it expires and cannot be reused.'}
+          {advertising
+            ? 'This exact change, once. Spend ceilings apply underneath and no approval lifts them.'
+            : publish
+              ? 'This exact post, once. Editing it afterwards needs a new approval.'
+              : 'One mission, one gate. Not a permission — it expires and cannot be reused.'}
         </span>
       </div>
     </article>

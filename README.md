@@ -351,6 +351,54 @@ red and names it. It is not rounded up to success.
 at all. The rest — brands, scopes, plan limits, troubleshooting — is in
 HWD-ZERO's README, because that is where the integration lives.
 
+## ZERO in your ad account: Meta Ads
+
+ZERO can read your Meta advertising and change it. It goes through Meta's own
+hosted Ads MCP — not a third-party one — and every change asks you first.
+
+```bash
+# .env.local, read by HWD-ZERO
+ZERO_META_ADS_ENABLED=true
+META_ADS_MAX_DAILY_BUDGET=100     # a ceiling no approval can lift
+```
+
+Then press **CONNECT META ADS**, sign in with Meta Business, close the tab.
+One OAuth click; no developer app, no token pasted anywhere.
+
+**Reading is autonomous. Spending is not.** *"Wie liefen meine Meta Ads diese
+Woche?"* reads real insights and answers. Looking at what an account already
+spent changes nothing and shows nobody anything — and making it need an
+approval would train you to click through approvals, which is how the one that
+matters gets clicked too.
+
+**The panel keeps READ and MANAGE apart**, because they are different facts:
+Meta rolls this out per account, a login can carry `ads_read` without
+`ads_management`, and a rollout can publish read tools and no write tools. One
+CONNECTED line would imply ZERO could change an account it can only look at.
+When Meta has not switched an account on, it says
+`META ADS MCP · NOT ENABLED FOR THIS ACCOUNT` and offers no workaround.
+
+**The gate shows the money.** Account, campaign, objective, budget in your
+currency, locations, audience, placements, optimisation, creative, schedule —
+and at the bottom, the line that costs: `CREATED PAUSED — activating is a
+separate approval`, or `DELIVERS IMMEDIATELY` when activation was part of what
+you approved. A change to something running shows the old value struck through
+beside the new one, because "CHF 50/day" means nothing until you see the CHF 30
+it replaces. Both are bound into the digest, so approving 30 → 50 is not
+approval to set 50 on something that has since become 200.
+
+**The brain draws it.** ZERO → ADVERTISING → one node per ad account this login
+really reaches. The states — READING, ANALYZING, PLANNING, AWAITING_APPROVAL,
+UPDATING, VERIFYING, DONE, ERROR — each come from an event the runtime
+published when it did that thing. UPDATING cannot appear before you approve,
+because the runtime does not send it before then.
+
+**Nothing about Meta reaches this bundle.** No endpoint, no scope grant, no
+verifier, no refresh token; tests assert it against `dist/`. The full
+behaviour — capability discovery, schema-bound arguments, idempotency,
+verification, ceilings, troubleshooting — is in
+[HWD-ZERO's docs/META_ADS.md](https://github.com/ChrisTheKey/HWD-ZERO/blob/claude/zero-termux-runtime-fix/docs/META_ADS.md).
+
 ## ZERO's voice: Fish Audio (optional, cloud)
 
 By default ZERO speaks with the browser's own synthesiser and nothing leaves

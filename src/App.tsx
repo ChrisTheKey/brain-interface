@@ -21,8 +21,11 @@ import type { GraphNode } from './graph/model';
 import type { ZeroAgent } from './zero/agentRegistry';
 import { withZeroStatus, type GraphRuntime } from './graph/transform';
 import { socialBranch, withSocial } from './graph/social';
+import { adsBranch, withAds } from './graph/ads';
 import { useMetricool } from './state/useMetricool';
+import { useMetaAds } from './state/useMetaAds';
 import { MetricoolPanel } from './ui/MetricoolPanel';
+import { MetaAdsPanel } from './ui/MetaAdsPanel';
 
 export default function App(): React.JSX.Element {
   // Same origin: the gateway on port 3000 proxies /api and /ws to HWD-ZERO on
@@ -63,6 +66,9 @@ export default function App(): React.JSX.Element {
   // Whether ZERO can publish, and to what. Read from the runtime, refreshed on
   // the events that change it — never polled on a timer.
   const metricool = useMetricool(operatorClient, operator.events);
+  // Whether ZERO can read the ad account, and — separately — whether it could
+  // change it. Meta rolls this out per account, so both are read, not assumed.
+  const metaAds = useMetaAds(operatorClient, operator.events);
 
   const graph = useMemo(() => {
     const base = withZeroStatus(brain.graph, zeroNodeStatus(status.state), {
@@ -73,8 +79,20 @@ export default function App(): React.JSX.Element {
     // there is no node for a network the brand is not connected to, and
     // PUBLISHING only ever appears after the runtime said it was publishing,
     // which it does not say before a human has approved.
-    return withSocial(base, socialBranch(metricool.status, operator.events));
-  }, [brain.graph, status.state, status.runtime, metricool.status, operator.events]);
+    const published = withSocial(base, socialBranch(metricool.status, operator.events));
+    // The advertising branch, drawn the same way and from the same kind of
+    // evidence: one node per ad account this login really reaches, and no
+    // UPDATING state until the runtime says it is updating — which it does not
+    // say before a human approves.
+    return withAds(published, adsBranch(metaAds.status, operator.events));
+  }, [
+    brain.graph,
+    status.state,
+    status.runtime,
+    metricool.status,
+    metaAds.status,
+    operator.events,
+  ]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{
@@ -208,6 +226,8 @@ export default function App(): React.JSX.Element {
       <OperatorPanel operator={operator} />
 
       <MetricoolPanel metricool={metricool} />
+
+      <MetaAdsPanel ads={metaAds} />
       <NodeTooltip node={hovered.node} position={hovered.position} />
       <DetailPanel
         node={selectedNode}

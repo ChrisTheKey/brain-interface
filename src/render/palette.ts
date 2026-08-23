@@ -85,6 +85,20 @@ export const NODE_PALETTE: Record<NodeType, NodePalette> = {
     rim: 'rgba(232, 218, 226, 0.36)',
     rimActive: 'rgba(255, 244, 250, 0.82)',
   },
+  adsHub: {
+    // The only branch of the brain that spends money. Its rim runs warmer
+    // than the publishing hub for the same reason the gate is stricter.
+    coreInner: '#120c0c',
+    coreOuter: '#000000',
+    rim: 'rgba(255, 214, 200, 0.52)',
+    rimActive: 'rgba(255, 236, 226, 0.94)',
+  },
+  adsAccount: {
+    coreInner: '#0c0909',
+    coreOuter: '#000000',
+    rim: 'rgba(240, 214, 206, 0.36)',
+    rimActive: 'rgba(255, 238, 230, 0.82)',
+  },
   toolDependency: {
     coreInner: '#070709',
     coreOuter: '#000000',

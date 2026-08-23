@@ -43,7 +43,23 @@ export type OperatorEventType =
   | 'zero.social.published'
   | 'zero.social.partial'
   | 'zero.social.failed'
-  | 'zero.social.refused';
+  | 'zero.social.refused'
+  /**
+   * ZERO in an ad account. Reading is autonomous and says so; everything that
+   * can spend passes through `awaiting_approval` first, so `updating` can only
+   * appear after a human approved — the runtime does not send it before then.
+   */
+  | 'zero.ads.connected'
+  | 'zero.ads.reading'
+  | 'zero.ads.analyzing'
+  | 'zero.ads.planning'
+  | 'zero.ads.awaiting_approval'
+  | 'zero.ads.updating'
+  | 'zero.ads.verifying'
+  | 'zero.ads.done'
+  | 'zero.ads.partial'
+  | 'zero.ads.error'
+  | 'zero.ads.refused';
 
 export interface OperatorEvent {
   event_id: string;
@@ -118,7 +134,7 @@ export interface OperatorApproval {
    */
   kind?: 'mission' | 'action';
   /** For an action: what the human is being asked about, verbatim. */
-  preview?: SocialPlanView;
+  preview?: SocialPlanView | AdsPlanView;
 }
 
 /** One network in a publish plan, with its own wording and its own minute. */
@@ -293,4 +309,148 @@ export interface ChildAgentDiscovery {
   root: string;
   exists: boolean;
   repositories: DiscoveredRepository[];
+}
+
+
+/** One step of a campaign build, or one mutation. Never optimistic. */
+export interface AdsStepView {
+  step: string;
+  ok: boolean;
+  object_id: string;
+  detail: string;
+  verified: boolean;
+  verification: string;
+}
+
+/**
+ * A paid-advertising action, fully decided, before anyone has been asked.
+ *
+ * `digest` is what the approval is bound to. A mutation additionally carries
+ * `before` beside `after`, because "CHF 50/day" means nothing to a person
+ * until they see the CHF 30 it replaces.
+ */
+export interface AdsPlanView {
+  plan_id: string;
+  action: 'create' | 'update' | 'budget' | 'pause' | 'activate' | 'delete';
+  account: { id: string; label: string };
+  digest: string;
+  idempotency_key: string;
+  risk: string;
+  warnings: string[];
+  created_at: string;
+  /** Present on a create. */
+  campaign?: {
+    name: string;
+    objective: string;
+    special_ad_categories: string[];
+    daily_budget_display: string | null;
+  };
+  ad_set?: {
+    name: string;
+    daily_budget_display: string | null;
+    lifetime_budget_display: string | null;
+    start_time: string;
+    end_time: string;
+    timezone: string;
+    optimization_goal: string;
+    placements: string[];
+    targeting: {
+      countries: string[];
+      cities: string[];
+      regions: string[];
+      radius_km: number;
+      age_min: number;
+      age_max: number;
+      languages: string[];
+      interests: string[];
+    };
+  } | null;
+  creative?: {
+    headline: string;
+    primary_text: string;
+    description: string;
+    call_to_action: string;
+    link: string;
+    media: string[];
+  } | null;
+  status?: string;
+  activates?: boolean;
+  delivery?: string;
+  note?: string;
+  /** Present on a mutation. */
+  entity?: { id: string; type: string; label: string };
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  currency?: string;
+  reason?: string;
+  tools?: Record<string, string>;
+}
+
+/** What `/api/integrations/meta-ads/status` answers. Never a token. */
+export interface MetaAdsStatus {
+  integration: string;
+  provider: string;
+  endpoint: string;
+  auth: string;
+  connected: boolean;
+  blocked_by: string;
+  local_only: boolean;
+  enabled: boolean;
+  mcp_enabled: boolean;
+  accounts: number;
+  account_list: {
+    id: string;
+    label: string;
+    currency: string;
+    timezone: string;
+    status: string;
+    mcp_enabled: boolean | null;
+  }[];
+  selected_account: string;
+  selected_account_label?: string;
+  read_ready: boolean;
+  mutation_ready: boolean;
+  mutation_reason?: string;
+  /** Meta's own signal, not an inference. */
+  rollout: 'available' | 'disabled' | 'unknown';
+  rollout_detail?: string;
+  capabilities: {
+    granted: string[];
+    missing: string[];
+    read_tools: string[];
+    write_tools: string[];
+    tool_count?: number;
+  };
+  /**
+   * The ceilings, so the operator can see what is bounding them. Not clearable
+   * by any approval — these are the environment, not a gate.
+   */
+  budget_guard: {
+    currency: string;
+    max_daily: string | null;
+    max_lifetime: string | null;
+    max_increase_percent: number | null;
+    configured: boolean;
+    note: string;
+  };
+  auth_state: { state: string; scopes?: string[]; expires_at?: string };
+  reason: string | null;
+  approval?: { gate: string; required: boolean; clearable_by_contract: boolean };
+}
+
+/** What one write actually did at Meta. */
+export interface AdsOutcome {
+  plan_id: string;
+  action: string;
+  state: 'done' | 'unverified' | 'partial_failure' | 'failed' | 'awaiting_approval';
+  delivering: boolean;
+  delivery: string;
+  deduplicated: boolean;
+  attempts: number;
+  steps: AdsStepView[];
+  created: AdsStepView[];
+  failed: AdsStepView[];
+  object_ids: string[];
+  summary?: string;
+  account_label?: string;
 }
