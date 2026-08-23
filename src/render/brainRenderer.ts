@@ -25,6 +25,10 @@ export interface ActivityPulse {
 
 export type ConversationVisualState =
   | 'idle'
+  /** Passive: waiting for "Hey ZERO". Present, but barely. */
+  | 'wakeListening'
+  /** The phrase landed. One clear beat, then listening proper. */
+  | 'wakeDetected'
   | 'listening'
   | 'processing'
   | 'agentActive'
@@ -365,6 +369,34 @@ function drawConversationState(
 ): void {
   const { conversation, time } = state;
   if (conversation === 'idle' || conversation === 'speaking') return;
+
+  if (conversation === 'wakeListening') {
+    // Availability, not activity. One slow breath at the rim, faint enough to
+    // sit behind everything else on the canvas — a wake indicator that draws
+    // the eye is a wake indicator nobody leaves switched on.
+    const breath = 0.5 + 0.5 * Math.sin(time * 1.1);
+    ctx.strokeStyle = `rgba(150, 190, 235, ${(0.05 + breath * 0.06).toFixed(3)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius * 1.14, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+
+  if (conversation === 'wakeDetected') {
+    // Heard you. Energy inward rather than outward: ZERO is taking something
+    // in, and the outward move is reserved for when it speaks.
+    for (const step of [0, 1, 2]) {
+      const phase = ((time * 2.4 + step * 0.33) % 1);
+      const ringRadius = radius * (1.9 - phase * 0.75);
+      ctx.strokeStyle = `rgba(226, 240, 255, ${((1 - phase) * 0.5).toFixed(3)})`;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    return;
+  }
 
   if (conversation === 'listening') {
     const level = Math.min(1, state.micLevel);

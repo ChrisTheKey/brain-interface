@@ -10,7 +10,8 @@ import { useZeroBrain } from './state/useZeroBrain';
 import { useOperator } from './state/useOperator';
 import { useZeroStatus } from './state/useZeroStatus';
 import { useChildAgents } from './state/useChildAgents';
-import { useVoiceTurn, visualStateFor } from './state/useVoiceTurn';
+import { useVoiceTurn, visualStateForWake } from './state/useVoiceTurn';
+import { useWakeWord } from './state/useWakeWord';
 import { zeroNodeDescription, zeroNodeLabel, zeroNodeStatus } from './zero/connectionState';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
@@ -118,6 +119,14 @@ export default function App(): React.JSX.Element {
     stopSpeaking: brain.stopSpeaking,
   });
 
+  // Hands-free. An activation layer in front of the same turn above — not a
+  // second pipeline, and off until the operator switches it on.
+  const wake = useWakeWord({
+    deliver: voice.submitVoice,
+    speaking: voice.state === 'speaking',
+    language: config.speech.language,
+  });
+
   const selectedNode = useMemo(
     () => graph.nodes.find((node) => node.id === selectedId) ?? null,
     [graph, selectedId],
@@ -152,7 +161,7 @@ export default function App(): React.JSX.Element {
         graph={graph}
         pulsesRef={brain.pulsesRef}
         levels={brain.levels}
-        conversation={visualStateFor(voice.state)}
+        conversation={visualStateForWake(wake.enabled ? wake.state : 'off', voice.state)}
         micLevel={voice.micLevel}
         selectedId={selectedId}
         onSelect={handleSelect}
@@ -170,6 +179,7 @@ export default function App(): React.JSX.Element {
             : null
         }
         voiceState={brain.voiceState}
+        wake={wake.enabled ? wake.diagnostics : null}
         onRetry={() => {
           status.retry();
           childAgents.refresh();
@@ -190,7 +200,7 @@ export default function App(): React.JSX.Element {
         onSelect={(id) => setSelectedId(id)}
         onSpeak={(text) => void brain.speak(text)}
       />
-      <VoiceBar voice={voice} onInterrupt={voice.interrupt} />
+      <VoiceBar voice={voice} wake={wake} onInterrupt={voice.interrupt} />
       <StatusBar
         status={status}
         connectionError={brain.connectionError}

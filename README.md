@@ -199,6 +199,55 @@ ZERO-WORKSPACE/
 └── …
 ```
 
+## Hands-free: "Hey ZERO"
+
+Switch on `HEY ZERO` in the conversation bar and stop pressing anything:
+
+```
+"Hey ZERO"                        →  DETECTED, then LISTENING
+"Welche Agenten sind verfügbar?"  →  captured until you stop talking
+                                  →  FINALIZING, UNDERSTANDING, ZERO answers
+                                  →  back to HEY ZERO · LISTENING
+```
+
+Both shapes work: the phrase alone with the instruction after a pause, or
+`"Hey ZERO, welche Agenten sind verfügbar?"` in one breath. Either way the
+phrase is activation, not instruction — what reaches ZERO is the sentence
+without it.
+
+**It is an activation layer, not a second ZERO.** The audio goes down the same
+`/ws/voice` socket, the transcript goes to the same `/api/voice/transcript`,
+and the same ZeroSession answers it. So the conversation continues across
+turns — "Hey ZERO, warum genau diesen?" resolves against the previous answer —
+and every permission gate still holds. Waking ZERO means "I would like to
+speak to you". It does not mean "approve everything I am about to say":
+`"Hey ZERO, sende die Outreach-Nachricht"` still stops at AWAITING APPROVAL.
+
+**Local, and quiet when nothing is happening.** No cloud speech API, no Web
+Speech Recognition — the same local whisper.cpp that already runs the voice
+turn. While the room is silent nothing is sent and nothing is inferred; a
+voice-activity detector opens the tap only when someone speaks, and the last
+600 ms are replayed first so the engine hears the whole of "Hey" rather than
+whatever was left after the detector made up its mind. Speech that was not
+addressed to ZERO is dropped from the buffer rather than accumulating.
+
+**It does not hear itself.** Ingestion stops before ZERO's first syllable and
+resumes a beat after its last, so an answer containing the words "Hey ZERO"
+cannot wake it.
+
+Off until switched on, remembered per browser. `HEY ZERO` shows what it is
+doing — LISTENING, DETECTED, PAUSED, OFFLINE — and the diagnostics panel adds
+provider, mic, VAD, STT, last wake and a false-activation count. The
+SPEAK / STOP buttons work exactly as before; hands-free is in addition to them,
+never instead.
+
+One honest limit: this is the browser's microphone, so it listens while the
+brain-interface page is open and the browser has not suspended it. It is not
+an operating-system-wide listener, and closing the tab stops it.
+
+Tune it with `ZERO_WAKE_PHRASE`, `ZERO_WAKE_VARIANTS`, `ZERO_WAKE_THRESHOLD` —
+but the switch in the interface is the intended way in.
+
 ## Talking to Claude Code in this repo
 
 Two halves, and they are not the same feature.

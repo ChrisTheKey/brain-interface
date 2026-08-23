@@ -230,6 +230,23 @@ export class VoiceTransport {
     }, limit);
   }
 
+  /**
+   * Drop the audio buffered so far without ending the session.
+   *
+   * Passive wake listening feeds the same socket for as long as the interface
+   * is open. Without this the server's utterance grows with every sentence
+   * spoken in the room until it hits its own ceiling, and every partial after
+   * that transcribes minutes of history to look for two words.
+   */
+  reset(): void {
+    if (!this.socket) return;
+    try {
+      this.socket.send(JSON.stringify({ type: 'reset' }));
+    } catch {
+      /* the close handler reports the state */
+    }
+  }
+
   /** Abandon the turn without finalizing — the interrupt path. */
   cancel(): void {
     // A deliberate abandon is terminal too: no timeout, no late error.

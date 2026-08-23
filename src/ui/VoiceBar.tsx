@@ -12,9 +12,12 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { VoiceTurnApi, VoiceTurnState } from '../state/useVoiceTurn';
+import { wakeLabelFor, type WakeWordApi } from '../state/useWakeWord';
 
 export interface VoiceBarProps {
   voice: VoiceTurnApi;
+  /** Hands-free. Optional: the bar works exactly as before without it. */
+  wake?: WakeWordApi;
   /** Push-to-talk is the safe default; a tap toggles on touch devices. */
   onInterrupt: () => void;
 }
@@ -30,7 +33,7 @@ const LABELS: Record<VoiceTurnState, string> = {
   error: 'VOICE ERROR',
 };
 
-export function VoiceBar({ voice, onInterrupt }: VoiceBarProps): React.JSX.Element {
+export function VoiceBar({ voice, wake, onInterrupt }: VoiceBarProps): React.JSX.Element {
   const [draft, setDraft] = useState('');
   const holding = useRef(false);
 
@@ -69,13 +72,15 @@ export function VoiceBar({ voice, onInterrupt }: VoiceBarProps): React.JSX.Eleme
         still being revised; the final transcript is plain, because it is what
         ZERO actually received.
       */}
-      {(voice.partial || voice.finalTranscript || voice.answer) && (
+      {(voice.partial || wake?.partial || voice.finalTranscript || voice.answer) && (
         <div className="transcript" aria-live="polite">
-          {voice.partial ? (
+          {voice.partial || wake?.partial ? (
             <p className="transcript-partial">
-              <span className="transcript-label">LISTENING</span>
+              <span className="transcript-label">
+                {wake?.state === 'command' && !voice.partial ? 'HEY ZERO' : 'LISTENING'}
+              </span>
               <span className="transcript-dot" aria-hidden="true" />
-              <span className="transcript-text">{voice.partial}</span>
+              <span className="transcript-text">{voice.partial || wake?.partial}</span>
             </p>
           ) : null}
 
@@ -103,6 +108,13 @@ export function VoiceBar({ voice, onInterrupt }: VoiceBarProps): React.JSX.Eleme
             </p>
           ) : null}
 
+          {wake?.error && !voice.error ? (
+            <p className="transcript-error">
+              <span className="transcript-label">{wake.error.code.replace(/_/g, ' ')}</span>
+              <span className="transcript-text">{wake.error.detail}</span>
+            </p>
+          ) : null}
+
           {/* Never a generic "voice failed": the code and the remedy. */}
           {voice.error ? (
             <p className="transcript-error">
@@ -114,6 +126,28 @@ export function VoiceBar({ voice, onInterrupt }: VoiceBarProps): React.JSX.Eleme
       )}
 
       <div className="voice-controls">
+        {wake ? (
+          /*
+            Hands-free is opt-in and stays that way. A microphone that starts
+            listening because a page loaded is not a feature anyone asked for,
+            so this is a switch the operator throws — and the label says what
+            it is doing rather than only that it is on.
+          */
+          <button
+            type="button"
+            className={`wake-toggle ${wake.enabled ? `wake-${wake.state}` : 'wake-off'}`}
+            onClick={wake.toggle}
+            aria-pressed={wake.enabled}
+            title={
+              wake.enabled
+                ? 'Hands-free is on. Say "Hey ZERO", then your instruction.'
+                : 'Switch on hands-free listening for "Hey ZERO".'
+            }
+          >
+            <span className="wake-dot" aria-hidden="true" />
+            {wakeLabelFor(wake.enabled, wake.state)}
+          </button>
+        ) : null}
         <button
           type="button"
           className={`speak-button ${listening ? 'speak-listening' : ''}`}

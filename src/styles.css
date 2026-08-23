@@ -997,3 +997,87 @@ body,
     justify-content: center;
   }
 }
+
+/*
+  Hands-free. Deliberately quiet: a wake indicator that draws the eye is one
+  nobody leaves switched on, and the point of this mode is that it can be left
+  switched on.
+*/
+.wake-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(150, 190, 235, 0.22);
+  border-radius: 999px;
+  background: rgba(12, 18, 30, 0.55);
+  color: rgba(198, 214, 238, 0.62);
+  font: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease;
+}
+
+.wake-toggle:hover {
+  color: rgba(226, 240, 255, 0.9);
+  border-color: rgba(150, 190, 235, 0.42);
+}
+
+.wake-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(140, 160, 185, 0.5);
+}
+
+/* Listening: one slow breath, the same rhythm as the core on the canvas. */
+.wake-toggle.wake-wake_listening .wake-dot {
+  background: rgba(120, 205, 255, 0.9);
+  animation: wake-breathe 3.2s ease-in-out infinite;
+}
+
+.wake-toggle.wake-wake_detected,
+.wake-toggle.wake-command {
+  color: rgba(232, 244, 255, 0.95);
+  border-color: rgba(120, 205, 255, 0.55);
+}
+
+.wake-toggle.wake-wake_detected .wake-dot,
+.wake-toggle.wake-command .wake-dot {
+  background: rgba(160, 225, 255, 1);
+  box-shadow: 0 0 10px rgba(120, 205, 255, 0.75);
+}
+
+.wake-toggle.wake-paused .wake-dot,
+.wake-toggle.wake-speaking .wake-dot {
+  background: rgba(255, 190, 120, 0.85);
+}
+
+.wake-toggle.wake-error {
+  border-color: rgba(255, 120, 120, 0.45);
+  color: rgba(255, 176, 176, 0.9);
+}
+
+.wake-toggle.wake-error .wake-dot {
+  background: rgba(255, 120, 120, 0.9);
+}
+
+@keyframes wake-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wake-toggle.wake-wake_listening .wake-dot {
+    animation: none;
+    opacity: 0.8;
+  }
+}

@@ -8,6 +8,7 @@
  */
 import type { ZeroStatusView } from '../state/useZeroStatus';
 import type { VoiceState } from '../voice/service';
+import type { WakeDiagnostics } from '../voice/wakeSession';
 
 export interface ZeroPanelProps {
   status: ZeroStatusView;
@@ -20,6 +21,8 @@ export interface ZeroPanelProps {
   childAgents: { discovered: number; allowed: number; missing: string[] } | null;
   voiceState: VoiceState;
   onRetry: () => void;
+  /** Hands-free, when it is switched on. Null when it is not. */
+  wake: WakeDiagnostics | null;
   /** Development diagnostics only; internal addresses never ship to the LAN. */
   showDiagnostics: boolean;
 }
@@ -38,6 +41,7 @@ export function ZeroPanel({
   childAgents,
   voiceState,
   onRetry,
+  wake,
   showDiagnostics,
 }: ZeroPanelProps): React.JSX.Element {
   const health = status.health;
@@ -143,6 +147,29 @@ export function ZeroPanel({
         <button type="button" className="zero-retry" onClick={onRetry}>
           Retry
         </button>
+      ) : null}
+
+      {wake ? (
+        <details className="zero-diagnostics">
+          <summary>hey zero</summary>
+          <ul>
+            {/* Measured, not assumed: each line is what the running listener
+                reports about itself. No audio and no transcript appears here. */}
+            <li>wake word · {wake.phrase}</li>
+            <li>provider · {wake.provider}</li>
+            <li>wake status · {wake.status}</li>
+            <li>mic · {wake.microphone}</li>
+            <li>vad · {wake.vad}</li>
+            <li>stt · {wake.stt}</li>
+            <li>
+              last wake ·{' '}
+              {wake.lastWakeAt ? new Date(wake.lastWakeAt).toLocaleTimeString() : 'never'}
+            </li>
+            <li>wakes · {wake.wakeCount}</li>
+            <li>false activations · {wake.falseActivationCount}</li>
+            {wake.batterySaver ? <li>battery saver · on</li> : null}
+          </ul>
+        </details>
       ) : null}
 
       {showDiagnostics && health?.diagnostics ? (

@@ -15,9 +15,11 @@
  * layering a second voice over the first.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MicrophoneError, openMicrophone, type MicrophoneStream } from '../voice/microphone';
+import { MicrophoneError } from '../voice/microphone';
+import { subscribeMicrophone, type MicrophoneSubscription } from '../voice/microphoneOwner';
 import { VoiceTransport, type VoiceReadiness } from '../voice/transport';
 import { apiPath } from '../zero/endpoints';
+import { postUtterance } from '../zero/utterance';
 import type { ConversationVisualState } from '../render/brainRenderer';
 
 /** What the operator sees. Each one is a real state, not a spinner. */
@@ -74,6 +76,12 @@ export interface VoiceTurnApi {
   interrupt: () => void;
   /** Send typed text down the identical pipeline. */
   submitText: (text: string) => void;
+  /**
+   * Deliver a spoken transcript that was captured elsewhere — the hands-free
+   * path. The same turn as a pressed button: same endpoint, same answer, same
+   * TTS, same conversation. Awaited so the caller knows when ZERO is done.
+   */
+  submitVoice: (text: string) => Promise<void>;
 }
 
 export interface VoiceTurnOptions {
@@ -87,7 +95,11 @@ export interface VoiceTurnOptions {
     handlers: ConstructorParameters<typeof VoiceTransport>[0],
     options: ConstructorParameters<typeof VoiceTransport>[1],
   ) => VoiceTransport;
-  microphoneFactory?: typeof openMicrophone;
+  /**
+   * Injected in tests. Defaults to the shared owner, which is what keeps wake
+   * listening and a pressed-button turn on one device rather than two.
+   */
+  microphoneFactory?: typeof subscribeMicrophone;
 }
 
 const REMEDIES: Record<VoiceErrorCode, string> = {
@@ -144,7 +156,7 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
   const [awaitingApproval, setAwaitingApproval] = useState(false);
   const [error, setError] = useState<VoiceTurnError | null>(null);
 
-  const micRef = useRef<MicrophoneStream | null>(null);
+  const micRef = useRef<MicrophoneSubscription | null>(null);
   const transportRef = useRef<VoiceTransport | null>(null);
   const levelRef = useRef(0);
   const mounted = useRef(true);
@@ -161,13 +173,15 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      micRef.current?.stop();
+      micRef.current?.release();
       transportRef.current?.close();
     };
   }, []);
 
   const closeMicrophone = useCallback(() => {
-    micRef.current?.stop();
+    // Release, not stop: wake listening may still be holding the same device,
+    // and the owner closes it only when the last listener has gone.
+    micRef.current?.release();
     micRef.current = null;
     levelRef.current = 0;
   }, []);
@@ -202,36 +216,26 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
       setPartial('');
       setAwaitingApproval(false);
       try {
-        const response = await fetchImpl(apiPath('/voice/transcript'), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text, input_type: inputType, confidence: confidence ?? 1 }),
-        });
-        const payload = (await response.json()) as {
-          speak?: string;
-          awaiting_approval?: boolean;
-          executed?: boolean;
-          error?: string;
-        };
+        const outcome = await postUtterance(text, { fetchImpl, inputType, confidence });
         if (!mounted.current) return;
 
-        if (!response.ok) {
-          setError(describe('zero_refused', payload.error ?? `ZERO answered ${response.status}`));
+        if (!outcome.ok) {
+          setError(describe('zero_refused', outcome.error));
           setState('error');
           return;
         }
 
-        setAnswer(payload.speak ?? '');
-        setAwaitingApproval(payload.awaiting_approval === true);
-        if (payload.executed) setState('executing');
+        setAnswer(outcome.speak);
+        setAwaitingApproval(outcome.awaitingApproval);
+        if (outcome.executed) setState('executing');
 
-        if (payload.speak && options.speak) {
+        if (outcome.speak && options.speak) {
           // Half-duplex: the microphone is already closed, and the server is
           // told too, so a phone speaker near the mic cannot loop.
           setState('speaking');
           await setServerSpeaking(true);
           try {
-            await options.speak(payload.speak);
+            await options.speak(outcome.speak);
           } catch {
             if (mounted.current) setError(describe('tts_offline', 'speech output failed'));
           } finally {
@@ -306,19 +310,19 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
     transportRef.current = transport;
     transport.open();
 
-    void (options.microphoneFactory ?? openMicrophone)({
+    void (options.microphoneFactory ?? subscribeMicrophone)({
       onChunk: (pcm16) => transport.send(pcm16),
       onLevel: (level) => {
         levelRef.current = level;
       },
       onError: () => setError(describe('audio_format_error', 'the captured audio failed')),
     })
-      .then((stream) => {
+      .then((subscription) => {
         if (!mounted.current) {
-          stream.stop();
+          subscription.release();
           return;
         }
-        micRef.current = stream;
+        micRef.current = subscription;
         setState('listening');
       })
       .catch((cause: unknown) => {
@@ -367,6 +371,11 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
     [deliver],
   );
 
+  const submitVoice = useCallback(
+    (text: string) => deliver(text, 'voice', null),
+    [deliver],
+  );
+
   return {
     state,
     partial,
@@ -380,6 +389,7 @@ export function useVoiceTurn(options: VoiceTurnOptions = {}): VoiceTurnApi {
     stop,
     interrupt,
     submitText,
+    submitVoice,
   };
 }
 
@@ -408,3 +418,36 @@ export function visualStateFor(state: VoiceTurnState): ConversationVisualState {
       return 'idle';
   }
 }
+
+/**
+ * How the brain looks when hands-free is on.
+ *
+ * The turn is the louder fact: once ZERO is finalizing, thinking or speaking,
+ * that is what the operator needs to see and the wake layer has nothing to
+ * add. Wake only owns the two states the turn has no word for — waiting for
+ * the phrase, and having just heard it.
+ */
+export function visualStateForWake(
+  wake: WakeVisualState,
+  turn: VoiceTurnState,
+): ConversationVisualState {
+  if (turn !== 'idle') return visualStateFor(turn);
+  if (wake === 'wake_detected') return 'wakeDetected';
+  if (wake === 'command') return 'listening';
+  if (wake === 'wake_listening' || wake === 'paused') return 'wakeListening';
+  if (wake === 'error') return 'error';
+  return 'idle';
+}
+
+/** The wake states this mapping cares about. Kept loose to avoid a cycle. */
+export type WakeVisualState =
+  | 'off'
+  | 'starting'
+  | 'wake_listening'
+  | 'wake_detected'
+  | 'command'
+  | 'finalizing'
+  | 'thinking'
+  | 'speaking'
+  | 'paused'
+  | 'error';
