@@ -244,6 +244,45 @@ regardless of everything else.
 The panel says `WEB · READ-ONLY` with the scope, or `WEB · OFFLINE`.
 `ZERO_WEB_ALLOW` narrows it to named hosts; `ZERO_WEB_DENY` always wins.
 
+## ZERO driving a real Chrome
+
+The reader above sees markup. Most of what a lead-research task actually needs
+to look at renders itself in JavaScript, and for that ZERO drives a browser
+properly: it loads, it runs, and what comes back is the text a person would
+have seen.
+
+```bash
+# .env.local, read by the gateway
+ZERO_BROWSER_ENABLED=true
+npm install            # playwright-core is an optional dependency
+```
+
+**Its own profile, never yours.** `.zero/browser-profile`, created empty. ZERO
+is never handed your logged-in Chrome, because a browser with your sessions in
+it is a browser that acts as you — your mail, your accounts, your bank — and
+no gate afterwards takes that back. Whatever ZERO logs into is ZERO's, and you
+can delete the directory to forget all of it. There is deliberately no setting
+that points it at your profile.
+
+**It drives the Chrome you already have**, via `channel: chrome`, rather than
+downloading a second one beside it. `ZERO_BROWSER_PATH` overrides that.
+
+**The guard is not reimplemented for it.** HWD-ZERO decides which addresses may
+be read; the gateway asks it before every navigation rather than keeping a
+second copy of those checks in JavaScript to drift apart. If the runtime cannot
+be asked, nothing opens — a browser that fails open is worse than one that
+fails. Page subresources are additionally refused when they point at a written
+private address, so an iframe aimed at `127.0.0.1` is stopped without a
+loopback round trip per image.
+
+Nothing is granted to the page: no microphone, no camera, no location, no
+downloads. The browser closes itself after five idle minutes, because a
+headless Chrome nobody remembers starting is a gigabyte of RAM and a surprise
+in Task Manager.
+
+Desktop only. There is no Chrome to drive on the Galaxy, and the status says
+so instead of the feature silently not being there.
+
 ## ZERO's voice: Fish Audio (optional, cloud)
 
 By default ZERO speaks with the browser's own synthesiser and nothing leaves

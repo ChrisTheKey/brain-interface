@@ -36,6 +36,7 @@ import { networkInterfaces } from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadTtsConfig, publicStatus } from './tts/config.mjs';
 import { redact, synthesize } from './tts/fishAudio.mjs';
+import { BrowserSession, loadBrowserConfig } from './browser/session.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..');
@@ -504,6 +505,14 @@ export function startGateway(config = readConfig()) {
     return provided !== null && constantTimeEquals(provided, token);
   };
 
+  // One browser for the process. Two would be two Chromes, two profiles and
+  // two things to forget to close.
+  let browser = null;
+  const browserSession = () => {
+    browser ??= new BrowserSession(loadBrowserConfig(process.env, process.cwd()));
+    return browser;
+  };
+
   const handleRequest = (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const remote = req.socket.remoteAddress ?? 'unknown';
@@ -637,6 +646,54 @@ export function startGateway(config = readConfig()) {
         .catch((error) => {
           sendJson(res, 500, { error: 'tts_failed', detail: redact(error?.message ?? '', {}) });
         });
+      return;
+    }
+
+    /*
+      ZERO driving a real browser.
+
+      Here rather than in HWD-ZERO because Playwright cannot live there — that
+      process keeps one runtime dependency so it stays installable on a phone.
+      Behind the pairing gate for the same reason the voice is: this opens a
+      browser and reaches the internet from the operator's machine.
+    */
+    if (url.pathname === '/api/browser/status') {
+      browserSession()
+        .status()
+        .then((status) => sendJson(res, 200, status))
+        .catch((error) => sendJson(res, 500, { error: 'browser_status_failed', detail: error.message }));
+      return;
+    }
+
+    if (url.pathname === '/api/browser/open' && req.method === 'POST') {
+      readJsonBody(req)
+        .then(async (payload) => {
+          const target = typeof payload?.url === 'string' ? payload.url.trim() : '';
+          if (!target) {
+            sendJson(res, 400, { error: 'empty_url' });
+            return;
+          }
+          try {
+            sendJson(res, 200, await browserSession().open(target));
+          } catch (error) {
+            // A refusal is the runtime's answer, not a fault: 403 so the
+            // caller can tell "not allowed" from "did not work".
+            const refused = error?.code === 'browser_url_refused' || error?.code === 'local_only';
+            sendJson(res, refused ? 403 : 502, {
+              error: error?.code ?? 'browser_failed',
+              detail: error?.message ?? String(error),
+            });
+          }
+        })
+        .catch((error) => sendJson(res, 500, { error: 'browser_failed', detail: error.message }));
+      return;
+    }
+
+    if (url.pathname === '/api/browser/close' && req.method === 'POST') {
+      browserSession()
+        .close()
+        .then((closed) => sendJson(res, 200, { closed }))
+        .catch((error) => sendJson(res, 500, { error: 'browser_failed', detail: error.message }));
       return;
     }
 
