@@ -18,6 +18,10 @@ export type NodeType =
   | 'tool'
   | 'resource'
   | 'app'
+  /** The publishing integration, as one node between ZERO and the networks. */
+  | 'socialHub'
+  /** One social network ZERO can actually publish to, from the real brand. */
+  | 'socialNetwork'
   | 'toolDependency';
 
 export type NodeStatus = 'active' | 'idle' | 'error' | 'notLoaded' | 'disabled' | 'unknown';
@@ -53,7 +57,11 @@ export type EdgeRelationship =
   | 'provides'
   | 'exposes'
   | 'requires'
-  | 'connector';
+  | 'connector'
+  /** ZERO → the publishing integration. */
+  | 'publishes'
+  /** The integration → one network it is really connected to. */
+  | 'network';
 
 export interface GraphEdge {
   id: string;
@@ -74,6 +82,12 @@ export const ZERO_NODE_ID = 'zero';
 
 export function threadNodeId(threadId: string): string {
   return `thread:${threadId}`;
+}
+
+export const SOCIAL_NODE_ID = 'social:metricool';
+
+export function socialNetworkNodeId(network: string): string {
+  return `social:network:${network}`;
 }
 
 export function agentNodeId(agentId: string): string {

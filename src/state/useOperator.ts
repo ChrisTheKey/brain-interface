@@ -52,6 +52,7 @@ export interface OperatorView {
   refresh: () => Promise<void>;
   startMission: (task: string) => Promise<void>;
   approve: (approval: OperatorApproval) => Promise<void>;
+  deny: (approval: OperatorApproval) => Promise<void>;
   setSafeMode: (enabled: boolean) => Promise<void>;
 }
 
@@ -201,6 +202,21 @@ export function useOperator(
     [client, refresh],
   );
 
+  const deny = useCallback(
+    async (approval: OperatorApproval) => {
+      try {
+        // Denial is a decision, not a pause: for a publish the runtime drops
+        // the prepared payload, so no later ticket can find it waiting.
+        await client.denyApproval(approval.mission_id, approval.gate);
+        setError('');
+        await refresh();
+      } catch (cause) {
+        setError(describe(cause));
+      }
+    },
+    [client, refresh],
+  );
+
   const setSafeMode = useCallback(
     async (enabled: boolean) => {
       try {
@@ -236,6 +252,7 @@ export function useOperator(
     refresh,
     startMission,
     approve,
+    deny,
     setSafeMode,
   };
 }

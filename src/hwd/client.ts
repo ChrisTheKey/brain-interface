@@ -18,12 +18,15 @@ import type {
   ApprovalTicket,
   ChildAgentDiscovery,
   GatewayHealth,
+  MetricoolStatus,
   OperatorApproval,
   OperatorEvent,
   OperatorMission,
   OperatorRegistry,
   OperatorState,
   OperatorTask,
+  SocialOutcome,
+  SocialPlanView,
 } from './types';
 
 export interface OperatorClientOptions {
@@ -188,6 +191,79 @@ export class HwdZeroClient {
     return this.post(`/api/approvals/${encodeURIComponent(ticket.ticket_id)}/grant`, {
       token: ticket.token,
     });
+  }
+
+  /**
+   * Denial. Not "not yet" — the gate closes and, for a publish, the prepared
+   * payload is dropped so no later ticket can find it still sitting there.
+   */
+  denyApproval(
+    missionId: string,
+    gate: string,
+    reason = '',
+  ): Promise<{ denied_gate: string; mission_id: string }> {
+    return this.post(`/api/approvals/${encodeURIComponent(missionId)}/deny`, { gate, reason });
+  }
+
+  // -------------------------------------------------------------- metricool
+
+  /** Connected, which brands, which networks. Never a token. */
+  metricoolStatus(): Promise<MetricoolStatus> {
+    return this.get('/api/integrations/metricool/status');
+  }
+
+  /**
+   * Start the sign-in. Returns the URL the operator opens; the PKCE verifier
+   * behind it stays inside HWD-ZERO, which is why the callback can safely come
+   * back through this gateway.
+   */
+  metricoolConnect(): Promise<{ authorization_url: string; state: string }> {
+    return this.post('/api/integrations/metricool/connect', {});
+  }
+
+  /** Forget the credential. Nothing already published is undone. */
+  metricoolDisconnect(): Promise<{ connected: boolean }> {
+    return this.post('/api/integrations/metricool/disconnect', {});
+  }
+
+  /**
+   * What ZERO would post if the operator says "poste das". ZERO does not write
+   * the copy — this is where what they wrote is held.
+   */
+  setSocialDraft(draft: {
+    text: string;
+    media?: unknown[];
+    first_comment?: string;
+    extras?: Record<string, unknown>;
+  }): Promise<unknown> {
+    return this.post('/api/social/draft', draft);
+  }
+
+  /**
+   * Build the plan and stop on the gate. Nothing reaches Metricool here: the
+   * reply is a preview and a pending approval, which is the whole point.
+   */
+  prepareSocial(request: {
+    text?: string;
+    request?: string;
+    networks?: string[];
+    when?: string;
+    brand?: string;
+    media?: unknown[];
+    first_comment?: string;
+    extras?: Record<string, unknown>;
+  }): Promise<{
+    plan: SocialPlanView;
+    approval: OperatorApproval;
+    state: string;
+    summary: string;
+  }> {
+    return this.post('/api/social/prepare', request);
+  }
+
+  /** What one publish actually did. */
+  socialOutcome(planId: string): Promise<SocialOutcome> {
+    return this.get(`/api/social/plans/${encodeURIComponent(planId)}`);
   }
 
   /** The kill switch. On refuses every execution until a human turns it off. */

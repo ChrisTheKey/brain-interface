@@ -71,6 +71,20 @@ export const NODE_PALETTE: Record<NodeType, NodePalette> = {
     rim: 'rgba(238, 212, 234, 0.4)',
     rimActive: 'rgba(255, 240, 252, 0.84)',
   },
+  socialHub: {
+    // Warmer than the tool providers around it, because this is the one branch
+    // of the brain that reaches people rather than machines.
+    coreInner: '#0d0b12',
+    coreOuter: '#000000',
+    rim: 'rgba(246, 226, 232, 0.5)',
+    rimActive: 'rgba(255, 246, 250, 0.92)',
+  },
+  socialNetwork: {
+    coreInner: '#0a090d',
+    coreOuter: '#000000',
+    rim: 'rgba(232, 218, 226, 0.36)',
+    rimActive: 'rgba(255, 244, 250, 0.82)',
+  },
   toolDependency: {
     coreInner: '#070709',
     coreOuter: '#000000',

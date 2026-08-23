@@ -231,6 +231,43 @@ case "$TTS_STATE" in
   *)     warn "the gateway did not answer /api/voice/tts/status" ;;
 esac
 
+# --------------------------------------------------------------- metricool
+
+group "METRICOOL MCP"
+METRICOOL_URL="http://127.0.0.1:$ZERO_UI_PORT/api/integrations/metricool/status"
+METRICOOL_CONNECTED="$(zero_health_field "$METRICOOL_URL" connected)"
+METRICOOL_BLOCKED="$(zero_health_field "$METRICOOL_URL" blocked_by)"
+if [ -z "$METRICOOL_CONNECTED" ]; then
+  warn "the runtime did not answer $METRICOOL_URL"
+  hint "start ZERO first; this reads the live integration, not a config file"
+elif [ "$METRICOOL_BLOCKED" = "local_only" ]; then
+  # Not a failure. It is the operator's own setting doing exactly what it says.
+  pass "LOCAL ONLY is ON — Metricool is BLOCKED and no socket is opened"
+elif [ "$METRICOOL_BLOCKED" = "metricool_disabled" ]; then
+  warn "DISCONNECTED — the integration is switched off (ZERO_METRICOOL_ENABLED)"
+elif [ "$METRICOOL_CONNECTED" = "true" ]; then
+  pass "CONNECTED — $(zero_health_field "$METRICOOL_URL" server)"
+  METRICOOL_BRANDS="$(zero_health_field "$METRICOOL_URL" brands)"
+  case "$METRICOOL_BRANDS" in
+    ""|0) warn "BRANDS 0 — this account has no brands, so there is nothing to publish to" ;;
+    *)    pass "BRANDS $METRICOOL_BRANDS" ;;
+  esac
+  METRICOOL_NETWORKS="$(zero_health_field "$METRICOOL_URL" networks)"
+  if [ -n "$METRICOOL_NETWORKS" ] && [ "$METRICOOL_NETWORKS" != "[object Object]" ]; then
+    pass "CONNECTED NETWORKS $METRICOOL_NETWORKS"
+  else
+    warn "CONNECTED NETWORKS none — no social account is linked to the brand"
+  fi
+  if [ "$(zero_health_field "$METRICOOL_URL" publishing_ready)" = "true" ]; then
+    pass "PUBLISHING READY — every post still stops at an approval"
+  else
+    warn "PUBLISHING BLOCKED — $(zero_health_field "$METRICOOL_URL" reason)"
+  fi
+else
+  warn "AUTH REQUIRED — nobody has signed in to Metricool yet"
+  hint "open the interface and press CONNECT METRICOOL; no token goes in a file by hand"
+fi
+
 # ------------------------------------------------------------------- state
 
 group "STATE"

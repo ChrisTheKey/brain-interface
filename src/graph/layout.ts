@@ -62,6 +62,8 @@ export const NODE_SIZES: Record<GraphNode['type'], number> = {
   tool: 13,
   resource: 12,
   app: 18,
+  socialHub: 26,
+  socialNetwork: 15,
   toolDependency: 12,
 };
 

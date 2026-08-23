@@ -337,6 +337,57 @@ if ($ttsReady -eq $true) {
 }
 
 # ------------------------------------------------------------------ resources
+Group 'METRICOOL MCP'
+$metricoolUrl = "http://127.0.0.1:$($config.UiPort)/api/integrations/metricool/status"
+$metricoolResult = Invoke-ZeroHttp -Url $metricoolUrl
+if (-not $metricoolResult.Answered) {
+    Warn "the runtime did not answer $metricoolUrl"
+    Hint 'start ZERO first; this reads the live integration, not a config file'
+} else {
+    try {
+        $metricool = $metricoolResult.Body | ConvertFrom-Json
+        if ($metricool.blocked_by -eq 'local_only') {
+            # Not a failure. It is the operator's own setting doing what it says.
+            Pass 'LOCAL ONLY is ON - Metricool is BLOCKED and no socket is opened'
+        } elseif ($metricool.blocked_by -eq 'metricool_disabled') {
+            Warn 'DISCONNECTED - the integration is switched off (ZERO_METRICOOL_ENABLED)'
+        } elseif ($metricool.connected -eq $true) {
+            Pass "CONNECTED - $($metricool.server)"
+            $brands = [int]$metricool.brands
+            if ($brands -gt 0) {
+                Pass "BRANDS $brands"
+            } else {
+                Warn 'BRANDS 0 - this account has no brands, so there is nothing to publish to'
+            }
+            $networks = @($metricool.networks)
+            if ($networks.Count -gt 0) {
+                Pass "CONNECTED NETWORKS $($networks.Count): $($networks -join ', ')"
+            } else {
+                Warn 'CONNECTED NETWORKS none - no social account is linked to the brand'
+            }
+            if ($metricool.publishing_ready -eq $true) {
+                Pass 'PUBLISHING READY - every post still stops at an approval'
+            } else {
+                Warn "PUBLISHING BLOCKED - $($metricool.reason)"
+            }
+            $missing = @($metricool.capabilities.missing)
+            if ($missing.Count -gt 0) {
+                Info "capabilities this server does not publish: $($missing -join ', ')"
+            }
+        } else {
+            Warn 'AUTH REQUIRED - nobody has signed in to Metricool yet'
+            Hint 'open the interface and press CONNECT METRICOOL; no token goes in a file by hand'
+        }
+    } catch {
+        Warn "the Metricool status could not be read: $($_.Exception.Message)"
+    }
+}
+if ($env:ZERO_LOCAL_ONLY -eq 'true') {
+    Info 'LOCAL ONLY ON'
+} else {
+    Info 'LOCAL ONLY OFF'
+}
+
 Group 'RESOURCES'
 foreach ($dir in @($paths.RunDir, $paths.LogDir)) {
     $writable = $false

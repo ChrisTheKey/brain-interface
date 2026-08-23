@@ -20,6 +20,9 @@ import { config } from './config';
 import type { GraphNode } from './graph/model';
 import type { ZeroAgent } from './zero/agentRegistry';
 import { withZeroStatus, type GraphRuntime } from './graph/transform';
+import { socialBranch, withSocial } from './graph/social';
+import { useMetricool } from './state/useMetricool';
+import { MetricoolPanel } from './ui/MetricoolPanel';
 
 export default function App(): React.JSX.Element {
   // Same origin: the gateway on port 3000 proxies /api and /ws to HWD-ZERO on
@@ -57,14 +60,21 @@ export default function App(): React.JSX.Element {
 
   // The ZERO node shows the *connection*, not "did a snapshot arrive". Offline
   // must look offline instead of looking like an empty graph.
-  const graph = useMemo(
-    () =>
-      withZeroStatus(brain.graph, zeroNodeStatus(status.state), {
-        label: zeroNodeLabel(status.runtime, status.state),
-        description: zeroNodeDescription(status.runtime),
-      }),
-    [brain.graph, status.state, status.runtime],
-  );
+  // Whether ZERO can publish, and to what. Read from the runtime, refreshed on
+  // the events that change it — never polled on a timer.
+  const metricool = useMetricool(operatorClient, operator.events);
+
+  const graph = useMemo(() => {
+    const base = withZeroStatus(brain.graph, zeroNodeStatus(status.state), {
+      label: zeroNodeLabel(status.runtime, status.state),
+      description: zeroNodeDescription(status.runtime),
+    });
+    // The publishing branch is drawn from real connections and real events:
+    // there is no node for a network the brand is not connected to, and
+    // PUBLISHING only ever appears after the runtime said it was publishing,
+    // which it does not say before a human has approved.
+    return withSocial(base, socialBranch(metricool.status, operator.events));
+  }, [brain.graph, status.state, status.runtime, metricool.status, operator.events]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hovered, setHovered] = useState<{
@@ -196,6 +206,8 @@ export default function App(): React.JSX.Element {
         showDiagnostics={showDiagnostics}
       />
       <OperatorPanel operator={operator} />
+
+      <MetricoolPanel metricool={metricool} />
       <NodeTooltip node={hovered.node} position={hovered.position} />
       <DetailPanel
         node={selectedNode}

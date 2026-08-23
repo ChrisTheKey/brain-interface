@@ -29,7 +29,21 @@ export type OperatorEventType =
   | 'approval.approved'
   | 'approval.denied'
   | 'policy.suggested'
-  | 'policy.changed';
+  | 'policy.changed'
+  /**
+   * ZERO publishing. One event per state the activity path draws, so what the
+   * interface shows is something that actually happened rather than an
+   * animation: `publishing` is only ever sent after a human approved.
+   */
+  | 'zero.social.connected'
+  | 'zero.social.preparing'
+  | 'zero.social.awaiting_approval'
+  | 'zero.social.publishing'
+  | 'zero.social.verifying'
+  | 'zero.social.published'
+  | 'zero.social.partial'
+  | 'zero.social.failed'
+  | 'zero.social.refused';
 
 export interface OperatorEvent {
   event_id: string;
@@ -96,6 +110,88 @@ export interface OperatorApproval {
   executor: string;
   iteration: number;
   payload_digest: string;
+  /**
+   * `mission` — a stopped loop that resumes. `action` — something that happens
+   * once, to the world, exactly as previewed. The two need different words on
+   * the button, because approving a resume and approving a post are not the
+   * same decision.
+   */
+  kind?: 'mission' | 'action';
+  /** For an action: what the human is being asked about, verbatim. */
+  preview?: SocialPlanView;
+}
+
+/** One network in a publish plan, with its own wording and its own minute. */
+export interface SocialTargetView {
+  network: string;
+  label: string;
+  text: string;
+  when: string;
+  time_source: string;
+  ok: boolean;
+  reasons: string[];
+  warnings: string[];
+  shortened: boolean;
+}
+
+/**
+ * A publish, fully decided, before anyone has been asked. `digest` is what the
+ * approval is bound to — the interface shows it so the operator can see that
+ * the thing they are approving is the thing they looked at.
+ */
+export interface SocialPlanView {
+  plan_id: string;
+  brand: { id: string; label: string };
+  timezone: string;
+  action: 'schedule' | 'publish';
+  created_at: string;
+  draft: {
+    text: string;
+    media: { url: string; kind: string; alt: string }[];
+    first_comment: string;
+  };
+  targets: SocialTargetView[];
+  publishable: string[];
+  blocked: { network: string; reasons: string[] }[];
+  requested: string[];
+  digest: string;
+  idempotency_key: string;
+  note: string;
+  risk: string;
+}
+
+/** What `/api/integrations/metricool/status` answers. Never a token. */
+export interface MetricoolStatus {
+  integration: string;
+  server: string;
+  connected: boolean;
+  blocked_by: string;
+  local_only: boolean;
+  enabled: boolean;
+  brands: number;
+  brand_list?: { id: string; label: string; timezone: string; networks: string[] }[];
+  networks: string[];
+  publishing_ready: boolean;
+  auth: { state: string; scopes?: string[]; expires_at?: string; can_refresh?: boolean };
+  capabilities: { granted: string[]; missing: string[]; can_publish: boolean; tools?: string[] };
+  reason: string | null;
+  plans_pending?: number;
+  published?: number;
+  approval?: { gate: string; required: boolean; clearable_by_contract: boolean };
+}
+
+/** What one publish actually did, per network. Never rounded up to success. */
+export interface SocialOutcome {
+  plan_id: string;
+  digest: string;
+  state: 'done' | 'partial_failure' | 'failed' | 'awaiting_approval';
+  attempts: number;
+  deduplicated: boolean;
+  at: string;
+  published: { network: string; ok: boolean; post_id: string; scheduled_for: string; url: string }[];
+  failed: { network: string; ok: boolean; detail: string }[];
+  summary?: string;
+  brand?: string;
 }
 
 /** Minted by the server, redeemable once, before `expires_at`. */

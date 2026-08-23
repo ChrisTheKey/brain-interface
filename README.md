@@ -308,6 +308,49 @@ in Task Manager.
 Desktop only. There is no desktop browser to drive on the Galaxy, and the
 status says so instead of the feature silently not being there.
 
+## ZERO publishing: Metricool
+
+ZERO can post to your social accounts. It goes through Metricool's official MCP
+server, and it asks you first — every single time.
+
+```bash
+# .env.local, read by HWD-ZERO
+ZERO_METRICOOL_ENABLED=true
+```
+
+Then press **CONNECT METRICOOL** in the panel, sign in, and close the tab.
+There is no token to paste anywhere.
+
+**The browser never touches Metricool.** The interface talks to the gateway on
+its own origin, the gateway proxies to HWD-ZERO, and only HWD-ZERO holds a
+credential. There is no OAuth code in this bundle — no verifier, no exchange,
+no refresh token — and a test asserts that `ai.metricool.com` appears nowhere
+in `src/` or in `dist/`. The browser's entire part in signing in is opening a
+URL the runtime handed it.
+
+**What you approve is what goes out.** The gate renders the whole payload: the
+brand, every network, the exact text that platform will show — which for X or
+Threads is shorter than what you typed, and you read *that*, not the draft —
+the media, the minute and the timezone. It shows the digest the approval is
+bound to. Edit the caption afterwards and the old approval no longer applies to
+anything: the runtime refuses it rather than posting the newer version under an
+older yes.
+
+**The brain shows the real path.** ZERO → SOCIAL → the networks, with one node
+per account your brand actually has. Not one per platform that exists — a brain
+that draws a TikTok node when no TikTok is connected has started telling you
+things that are not true. The states are PREPARING, WAITING FOR APPROVAL,
+PUBLISHING, VERIFYING, DONE and PARTIAL FAILURE, and each one comes from an
+event the runtime published when it did that thing. PUBLISHING cannot appear
+before you approve, because the runtime does not send it before then.
+
+A publish that reached four networks and failed at the fifth draws the fifth in
+red and names it. It is not rounded up to success.
+
+`ZERO_LOCAL_ONLY=true` shows `BLOCKED BY LOCAL-ONLY MODE` and opens no socket
+at all. The rest — brands, scopes, plan limits, troubleshooting — is in
+HWD-ZERO's README, because that is where the integration lives.
+
 ## ZERO's voice: Fish Audio (optional, cloud)
 
 By default ZERO speaks with the browser's own synthesiser and nothing leaves

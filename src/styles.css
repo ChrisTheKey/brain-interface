@@ -1120,3 +1120,202 @@ body,
   color: rgba(255, 190, 120, 0.7);
   font-size: 0.58rem;
 }
+
+/* ---------------------------------------------------------------- metricool
+
+   Four lines and a button. Metricool is already a dashboard; a second one
+   here would push the brain off its own screen for something used once a day.
+*/
+.metricool {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+}
+
+.metricool-connect,
+.metricool-toggle,
+.metricool-disconnect {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.metricool-connect {
+  width: 100%;
+  border-color: rgba(180, 210, 255, 0.5);
+  color: rgba(215, 232, 255, 0.95);
+}
+
+.metricool-toggle,
+.metricool-disconnect {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.metricool-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metricool-networks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.metricool-networks li {
+  padding: 2px 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* ------------------------------------------------------- publish approval
+
+   The one gate that shows its whole payload. An approval for an irreversible
+   action has to render the action, not a summary of it: the operator reads
+   the exact text each platform will show, because a preview that says one
+   thing while another goes out is worse than no preview at all.
+*/
+.approval-publish {
+  border-color: rgba(255, 150, 120, 0.55);
+}
+
+.publish-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 170, 140, 0.25);
+}
+
+.publish-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.publish-facts dt {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.publish-facts dd {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.publish-risk {
+  color: rgba(255, 180, 150, 0.95);
+  letter-spacing: 0.08em;
+}
+
+.publish-targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.publish-target {
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 170, 140, 0.2);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.publish-network {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 210, 190, 0.9);
+}
+
+.publish-when {
+  float: right;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.publish-text {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.publish-shortened,
+.publish-warning {
+  display: block;
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+.publish-media,
+.publish-note {
+  margin: 0;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.publish-blocked {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  color: rgba(255, 190, 170, 0.85);
+}
+
+.publish-blocked strong {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.publish-digest {
+  margin: 0;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 9px;
+  color: var(--ink-dim);
+  opacity: 0.7;
+}
+
+.approval-deny {
+  border-color: var(--panel-border) !important;
+  background: transparent !important;
+  color: var(--ink-dim) !important;
+}

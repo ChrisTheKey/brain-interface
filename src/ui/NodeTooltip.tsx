@@ -15,6 +15,8 @@ const TYPE_LABEL: Record<GraphNode['type'], string> = {
   tool: 'Tool',
   resource: 'Source (MCP resource)',
   app: 'Connector (app)',
+  socialHub: 'Publishing (Metricool)',
+  socialNetwork: 'Connected social account',
   toolDependency: 'Declared tool dependency',
 };
 
