@@ -199,6 +199,39 @@ ZERO-WORKSPACE/
 └── …
 ```
 
+## Talking to Claude Code in this repo
+
+Two halves, and they are not the same feature.
+
+**Dictation in** is Claude Code's own. `.claude/settings.json` switches it on
+for this repository: hold the voice key, talk, and what you said lands in the
+prompt. Nothing here implements it.
+
+**Spoken replies out** are not built into the CLI at all. `scripts/zero-say.mjs`
+adds them — a `Stop` hook takes the last thing Claude said, drops the code
+blocks, tables and URLs, and hands the prose to whatever synthesiser the
+machine already has: `termux-tts-speak` on the Galaxy, `System.Speech` on the
+ThinkPad, `say` or `spd-say` elsewhere.
+
+```
+/voice on        read replies aloud from now on
+/voice off       stop
+/voice status    is it on, and is there a voice to use
+/voice say ...   read this one thing out
+```
+
+Off until switched on, per checkout — the toggle is a file under `.zero/run/`
+that is never committed. A repository that started talking at whoever cloned it
+would be a prank rather than a feature.
+
+It reads prose only. That is partly because listening to a diff is useless, and
+partly because a token pasted into a code block is precisely the thing that
+must not be read out across a room. If no synthesiser is installed, `/voice
+status` says so and names the one command that fixes it; nothing is installed
+behind your back.
+
+The reply is spoken after the turn ends, because that is when the hook fires.
+
 ## Windows 11 (ThinkPad)
 
 One command, from a machine with nothing set up to a running ZERO:
