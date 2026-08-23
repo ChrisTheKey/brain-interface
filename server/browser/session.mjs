@@ -29,6 +29,13 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  DEFAULT_BROWSER,
+  browserNames,
+  describeBrowser,
+  launchOptionsFor,
+  normaliseBrowserName,
+} from './browsers.mjs';
 
 /** Literal private addresses, as a cheap second net for subresources.
  *
@@ -48,6 +55,8 @@ const DEFAULT_NAV_TIMEOUT = 30_000;
 
 export const BROWSER_ERRORS = {
   UNAVAILABLE: 'browser_unavailable',
+  UNKNOWN: 'browser_unknown',
+  NOT_INSTALLED: 'browser_not_installed',
   DISABLED: 'browser_disabled',
   LOCAL_ONLY: 'local_only',
   LAUNCH_FAILED: 'browser_launch_failed',
@@ -69,11 +78,13 @@ export function loadBrowserConfig(env = process.env, root = process.cwd()) {
     enabled: flag(env.ZERO_BROWSER_ENABLED, false),
     localOnly: flag(env.ZERO_LOCAL_ONLY, false),
     // A profile of ZERO's own. Never `--user-data-dir` pointed at yours, and
-    // there is deliberately no setting that would let it be.
-    profileDir: (env.ZERO_BROWSER_PROFILE ?? '').trim() || join(root, '.zero', 'browser-profile'),
-    // The Chrome already on the machine, rather than a second one downloaded
-    // beside it. `chromium` when Playwright's own is what is present.
-    channel: (env.ZERO_BROWSER_CHANNEL ?? 'chrome').trim(),
+    // there is deliberately no setting that would let it be. One directory per
+    // browser, so switching from Chrome to Brave does not hand Brave whatever
+    // Chrome had collected.
+    profileRoot: (env.ZERO_BROWSER_PROFILE ?? '').trim() || join(root, '.zero', 'browser-profile'),
+    // Which browser, by name. `channel` is derived from it rather than set
+    // here: Brave has no channel and Firefox is not a Chromium at all.
+    browser: normaliseBrowserName(env.ZERO_BROWSER ?? env.ZERO_BROWSER_CHANNEL ?? DEFAULT_BROWSER),
     executablePath: (env.ZERO_BROWSER_PATH ?? '').trim(),
     headless: !flag(env.ZERO_BROWSER_HEADFUL, false),
     idleMs: Number(env.ZERO_BROWSER_IDLE_MS ?? DEFAULT_IDLE_MS) || DEFAULT_IDLE_MS,
@@ -130,14 +141,21 @@ export class BrowserSession {
   #idleTimer = null;
   #launching = null;
   #playwright;
+  #playwrightGiven;
   #fetchImpl;
   #lastUsedAt = 0;
   #opened = 0;
+  #browser;
 
   constructor(config, options = {}) {
     this.#config = config;
-    // Injected in tests. In the browser's absence the honest answer is
-    // "unavailable", not a stack trace.
+    // One session drives one browser. A second browser is a second session
+    // with its own profile, which is what the pool below is for.
+    this.#browser = normaliseBrowserName(options.browser ?? config.browser ?? DEFAULT_BROWSER);
+    // Injected in tests. Passing it explicitly — null included — is the whole
+    // answer: an injected null means "this machine has no Playwright", which is
+    // not the same as never having been asked.
+    this.#playwrightGiven = Object.hasOwn(options, 'playwright');
     this.#playwright = options.playwright ?? null;
     this.#fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
@@ -146,8 +164,23 @@ export class BrowserSession {
     return this.#context !== null;
   }
 
+  get browserName() {
+    return this.#browser;
+  }
+
+  /** This browser's own profile. Never shared, never the operator's. */
+  get profileDir() {
+    return join(this.#config.profileRoot, this.#browser);
+  }
+
+  #describe() {
+    return describeBrowser(this.#browser, {
+      executablePath: this.#config.executablePath,
+    });
+  }
+
   async #module() {
-    if (this.#playwright) return this.#playwright;
+    if (this.#playwrightGiven || this.#playwright) return this.#playwright;
     try {
       this.#playwright = await import('playwright-core');
       return this.#playwright;
@@ -157,23 +190,41 @@ export class BrowserSession {
   }
 
   async status() {
-    const reason = browserUnavailableReason(this.#config);
-    const module = reason ? null : await this.#module();
+    const description = this.#describe();
+    const configReason = browserUnavailableReason(this.#config);
+    const module = configReason ? null : await this.#module();
+    // Three separate facts, kept separate because they want three different
+    // answers: the browser is not switched on, Playwright is not installed,
+    // or that particular browser is not on this machine.
+    let reason = configReason;
+    if (!reason && !description.known) reason = BROWSER_ERRORS.UNKNOWN;
+    if (!reason && module === null) reason = BROWSER_ERRORS.UNAVAILABLE;
+    if (!reason && !description.found) reason = BROWSER_ERRORS.NOT_INSTALLED;
+
     return {
       provider: 'playwright',
-      // A phone has no desktop Chrome to drive; saying so beats a feature that
-      // silently is not there.
-      installed: module !== null,
+      browser: this.#browser,
+      label: description.label ?? this.#browser,
+      engine: description.engine ?? 'unknown',
+      channel: description.channel ?? null,
+      // Chrome, Edge and Brave use what is already there. Firefox cannot —
+      // Playwright's automation relies on patches, so it brings its own.
+      uses_installed: description.uses_installed ?? false,
+      install: description.install ?? '',
+      note: description.note ?? '',
+      // A phone has no desktop browser to drive; saying so beats a feature
+      // that silently is not there.
+      playwright: module !== null,
+      found: description.found ?? false,
       enabled: this.#config.enabled,
-      ready: reason === null && module !== null,
-      reason: reason ?? (module ? null : BROWSER_ERRORS.UNAVAILABLE),
+      ready: reason === null,
+      reason,
       running: this.running,
-      channel: this.#config.channel,
       headless: this.#config.headless,
       proxy: this.#config.proxy ? 'configured' : 'none',
       // Shown on purpose: the operator should be able to see it is not theirs,
       // and delete it.
-      profile: this.#config.profileDir,
+      profile: this.profileDir,
       own_profile: true,
       pages_opened: this.#opened,
       idle_ms: this.#config.idleMs,
@@ -193,18 +244,36 @@ export class BrowserSession {
       refusal.code = reason;
       throw refusal;
     }
+    const description = this.#describe();
+    if (!description.known) {
+      const refusal = new Error(
+        `${this.#browser} is not a browser ZERO knows (${browserNames().join(', ')})`,
+      );
+      refusal.code = BROWSER_ERRORS.UNKNOWN;
+      throw refusal;
+    }
     const module = await this.#module();
     if (!module) {
       const refusal = new Error(
-        'playwright-core is not installed, or there is no Chrome to drive on this machine',
+        'playwright-core is not installed, so there is no browser to drive on this machine',
       );
       refusal.code = BROWSER_ERRORS.UNAVAILABLE;
       throw refusal;
     }
+    if (!description.found) {
+      const refusal = new Error(
+        description.install
+          ? `${description.label} is not installed here — ${description.install}`
+          : `${description.label} was not found on this machine`,
+      );
+      refusal.code = BROWSER_ERRORS.NOT_INSTALLED;
+      throw refusal;
+    }
 
     this.#launching = (async () => {
-      if (!existsSync(this.#config.profileDir)) {
-        mkdirSync(this.#config.profileDir, { recursive: true });
+      const profileDir = this.profileDir;
+      if (!existsSync(profileDir)) {
+        mkdirSync(profileDir, { recursive: true });
       }
       const options = {
         headless: this.#config.headless,
@@ -212,22 +281,26 @@ export class BrowserSession {
         // microphone, the camera or where the machine is.
         permissions: [],
         acceptDownloads: false,
-        args: ['--no-first-run', '--no-default-browser-check', '--disable-background-networking'],
+        // Engine-specific: Chromium flags are not Firefox flags, and Firefox
+        // refuses what it does not recognise.
+        ...launchOptionsFor(description, { executablePath: this.#config.executablePath }),
       };
       if (this.#config.proxy) options.proxy = { server: this.#config.proxy };
-      if (this.#config.executablePath) options.executablePath = this.#config.executablePath;
-      else if (this.#config.channel && this.#config.channel !== 'chromium') {
-        options.channel = this.#config.channel;
+
+      const engine = module[description.engine];
+      if (!engine) {
+        const refusal = new Error(`playwright-core has no ${description.engine} driver`);
+        refusal.code = BROWSER_ERRORS.UNAVAILABLE;
+        throw refusal;
       }
       try {
         // Persistent, so a login ZERO makes survives — and it is ZERO's login,
         // in ZERO's directory, not one of yours.
-        this.#context = await module.chromium.launchPersistentContext(
-          this.#config.profileDir,
-          options,
-        );
+        this.#context = await engine.launchPersistentContext(profileDir, options);
       } catch (error) {
-        const refusal = new Error(`Chrome could not be started: ${error?.message ?? error}`);
+        const refusal = new Error(
+          `${description.label} could not be started: ${error?.message ?? error}`,
+        );
         refusal.code = BROWSER_ERRORS.LAUNCH_FAILED;
         throw refusal;
       }
@@ -347,5 +420,71 @@ export class BrowserSession {
   /** For diagnostics: how long since the browser was last used. */
   get idleMs() {
     return this.#lastUsedAt ? Date.now() - this.#lastUsedAt : 0;
+  }
+}
+
+/**
+ * One session per browser, created on demand.
+ *
+ * ZERO can be connected to Chrome, Edge, Brave and Firefox at once without
+ * running four of them: a browser is launched the first time it is asked for
+ * and closes itself when it goes idle, so "connected" costs a config entry
+ * rather than a gigabyte.
+ *
+ * Each keeps its own profile directory. Handing Brave whatever Chrome had
+ * collected would defeat the point of separate browsers, and mixing them is
+ * exactly the kind of thing nobody notices until a session turns up somewhere
+ * it should not have.
+ */
+export class BrowserPool {
+  #config;
+  #options;
+  #sessions = new Map();
+
+  constructor(config, options = {}) {
+    this.#config = config;
+    this.#options = options;
+  }
+
+  /** The session for one browser, made if it does not exist yet. */
+  session(name) {
+    const key = normaliseBrowserName(name ?? this.#config.browser);
+    let existing = this.#sessions.get(key);
+    if (!existing) {
+      existing = new BrowserSession(this.#config, { ...this.#options, browser: key });
+      this.#sessions.set(key, existing);
+    }
+    return existing;
+  }
+
+  /** What every browser ZERO knows can do on this machine. */
+  async status() {
+    const browsers = [];
+    for (const name of browserNames()) {
+      browsers.push(await this.session(name).status());
+    }
+    return {
+      default: normaliseBrowserName(this.#config.browser),
+      // Ordered so the operator reads what works before what does not.
+      browsers: browsers.sort((left, right) => Number(right.ready) - Number(left.ready)),
+      running: browsers.filter((entry) => entry.running).map((entry) => entry.browser),
+    };
+  }
+
+  open(url, name) {
+    return this.session(name).open(url);
+  }
+
+  /** Close one, or every one. Returns the names that were actually running. */
+  async close(name) {
+    if (name) {
+      const closed = await this.session(name).close();
+      return closed ? [normaliseBrowserName(name)] : [];
+    }
+    const closed = [];
+    for (const [key, session] of this.#sessions) {
+      if (await session.close()) closed.push(key);
+    }
+    return closed;
   }
 }

@@ -5,11 +5,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   BROWSER_ERRORS,
+  BrowserPool,
   BrowserSession,
   assertAllowed,
   browserUnavailableReason,
   loadBrowserConfig,
 } from '../server/browser/session.mjs';
+import {
+  browserNames,
+  candidatePaths,
+  describeBrowser,
+  launchOptionsFor,
+  normaliseBrowserName,
+} from '../server/browser/browsers.mjs';
 
 /**
  * ZERO driving a browser.
@@ -75,14 +83,28 @@ describe('the profile ZERO browses in', () => {
     // A browser holding your sessions is a browser that acts as you — your
     // mail, your accounts, your bank. That is not something a gate later can
     // take back, so it is never offered.
-    expect(config.profileDir).toBe(join('/home/someone/zero', '.zero', 'browser-profile'));
-    expect(config.profileDir).not.toMatch(/Default|User Data|Chrome\/Profile/);
+    expect(config.profileRoot).toBe(join('/home/someone/zero', '.zero', 'browser-profile'));
+    expect(config.profileRoot).not.toMatch(/Default|User Data|Chrome\/Profile/);
   });
 
-  it('drives the Chrome already on the machine rather than a second one', () => {
+  it('gives each browser its own directory', () => {
+    const config = loadBrowserConfig({ ZERO_BROWSER_ENABLED: 'true' }, '/home/someone/zero');
+    const chrome = new BrowserSession(config, { browser: 'chrome', playwright: null });
+    const brave = new BrowserSession(config, { browser: 'brave', playwright: null });
+    // Handing Brave whatever Chrome collected would defeat the point of
+    // separate browsers, and a session turning up where it should not have is
+    // exactly the kind of thing nobody notices until it matters.
+    expect(chrome.profileDir).not.toBe(brave.profileDir);
+    expect(chrome.profileDir.endsWith('chrome')).toBe(true);
+    expect(brave.profileDir.endsWith('brave')).toBe(true);
+  });
+
+  it('drives the browser already on the machine rather than a second one', () => {
     // "Connect to Chrome" means the one that is there, not 150 MB downloaded
     // beside it.
-    expect(loadBrowserConfig({}, '/x').channel).toBe('chrome');
+    expect(loadBrowserConfig({}, '/x').browser).toBe('chrome');
+    expect(describeBrowser('chrome').channel).toBe('chrome');
+    expect(describeBrowser('edge').channel).toBe('msedge');
   });
 
   it('is off until it is switched on, and local-only beats everything', () => {
@@ -186,5 +208,154 @@ describe('what it says about itself', () => {
   it('closes cleanly even when it never opened', async () => {
     const session = new BrowserSession(loadBrowserConfig({}, scratch()));
     await expect(session.close()).resolves.toBe(false);
+  });
+});
+
+
+// ------------------------------------------------------------ the four names
+
+describe('the browsers ZERO answers to', () => {
+  it('knows Chrome, Edge, Brave and Firefox', () => {
+    expect(browserNames()).toEqual(
+      expect.arrayContaining(['chrome', 'edge', 'brave', 'firefox']),
+    );
+  });
+
+  it('takes the names people actually type', () => {
+    expect(normaliseBrowserName('Microsoft Edge')).toBe('edge');
+    expect(normaliseBrowserName('msedge')).toBe('edge');
+    expect(normaliseBrowserName('Brave Browser')).toBe('brave');
+    expect(normaliseBrowserName('Mozilla Firefox')).toBe('firefox');
+    expect(normaliseBrowserName('  CHROME ')).toBe('chrome');
+    expect(normaliseBrowserName('')).toBe('chrome');
+  });
+
+  it('says plainly which ones use the browser you already have', () => {
+    // The distinction that matters, and the one an operator would otherwise
+    // discover by wondering why Firefox does nothing.
+    expect(describeBrowser('chrome').uses_installed).toBe(true);
+    expect(describeBrowser('edge').uses_installed).toBe(true);
+    expect(describeBrowser('brave').uses_installed).toBe(true);
+    expect(describeBrowser('firefox').uses_installed).toBe(false);
+    expect(describeBrowser('firefox').install).toContain('playwright install firefox');
+    expect(describeBrowser('firefox').note).toMatch(/cannot drive a stock Firefox/i);
+  });
+
+  it('reaches Chrome and Edge by channel, and Brave by its binary', () => {
+    // Brave is Chromium but is not one of Playwright's channels, so it is
+    // found on disk instead. Same engine, same automation, still no download.
+    expect(describeBrowser('chrome').channel).toBe('chrome');
+    expect(describeBrowser('edge').channel).toBe('msedge');
+    expect(describeBrowser('brave').channel).toBe(null);
+
+    const found = describeBrowser('brave', {
+      platform: 'linux',
+      exists: (path: string) => path === '/usr/bin/brave-browser',
+    });
+    expect(found.found).toBe(true);
+    expect(found.executable).toBe('/usr/bin/brave-browser');
+  });
+
+  it('knows Firefox is a different engine, not a Chromium with a logo', () => {
+    expect(describeBrowser('firefox').engine).toBe('firefox');
+    for (const name of ['chrome', 'edge', 'brave']) {
+      expect(describeBrowser(name).engine, name).toBe('chromium');
+    }
+  });
+
+  it('gives Firefox preferences and Chromium flags, never the other way round', () => {
+    // Firefox rejects arguments it does not recognise, so handing it
+    // --no-first-run is a launch that fails for a reason nobody would guess.
+    const chromium = launchOptionsFor(describeBrowser('chrome'));
+    expect(chromium['args']).toContain('--no-first-run');
+    expect(chromium).not.toHaveProperty('firefoxUserPrefs');
+
+    const firefox = launchOptionsFor(describeBrowser('firefox'));
+    expect(firefox).not.toHaveProperty('args');
+    expect(firefox['firefoxUserPrefs']).toMatchObject({
+      'browser.shell.checkDefaultBrowser': false,
+    });
+  });
+
+  it('looks where each installer actually puts things, per platform', () => {
+    const windows = candidatePaths('brave', 'win32', { PROGRAMFILES: 'C:\\Program Files' });
+    // Built with Windows separators even when the test runs on Linux, or the
+    // path matches nothing and the bug hides until someone runs Windows.
+    expect(windows[0]).toBe(
+      'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+    );
+    expect(candidatePaths('brave', 'darwin')[0]).toContain('/Applications/Brave Browser.app');
+    expect(candidatePaths('brave', 'linux')).toContain('/usr/bin/brave-browser');
+    expect(candidatePaths('edge', 'linux')).toContain('/usr/bin/microsoft-edge');
+  });
+
+  it('refuses a name it does not know instead of guessing', () => {
+    const unknown = describeBrowser('safari');
+    expect(unknown.known).toBe(false);
+    expect(unknown.reason).toContain('chrome');
+  });
+});
+
+describe('several browsers at once', () => {
+  it('gives each its own session and never mixes them', async () => {
+    const pool = new BrowserPool(loadBrowserConfig({ ZERO_BROWSER_ENABLED: 'true' }, scratch()), {
+      playwright: null,
+    });
+    const chrome = pool.session('chrome');
+    const brave = pool.session('Brave Browser');
+    expect(chrome.browserName).toBe('chrome');
+    expect(brave.browserName).toBe('brave');
+    // Asking twice is the same browser, not a second one.
+    expect(pool.session('chrome')).toBe(chrome);
+    expect(chrome.profileDir).not.toBe(brave.profileDir);
+  });
+
+  it('reports every browser and what this machine can do with each', async () => {
+    const pool = new BrowserPool(loadBrowserConfig({ ZERO_BROWSER_ENABLED: 'true' }, scratch()), {
+      playwright: null,
+    });
+    const status = await pool.status();
+    expect(status.default).toBe('chrome');
+    expect(status.browsers.map((entry) => entry.browser).sort()).toEqual(
+      ['brave', 'chrome', 'chromium', 'edge', 'firefox'].sort(),
+    );
+    // Playwright is absent in this fixture, so nothing claims to be ready.
+    for (const entry of status.browsers) {
+      expect(entry.ready, entry.browser).toBe(false);
+      expect(entry.reason, entry.browser).toBeTruthy();
+    }
+    expect(status.running).toEqual([]);
+  });
+
+  it('closes one without closing the others, and all of them on request', async () => {
+    const pool = new BrowserPool(loadBrowserConfig({ ZERO_BROWSER_ENABLED: 'true' }, scratch()), {
+      playwright: null,
+    });
+    pool.session('chrome');
+    pool.session('edge');
+    // Nothing was launched, so nothing reports as closed — the honest answer
+    // rather than a cheerful one.
+    await expect(pool.close('chrome')).resolves.toEqual([]);
+    await expect(pool.close()).resolves.toEqual([]);
+  });
+
+  it('still refuses an address before launching, whichever browser was asked for', async () => {
+    const stub = await guard(() => ({ status: 403, body: { error: 'refused' } }));
+    const pool = new BrowserPool(
+      loadBrowserConfig({ ZERO_BROWSER_ENABLED: 'true', ZERO_API_URL: stub.url }, scratch()),
+      {
+        playwright: {
+          chromium: { launchPersistentContext: () => { throw new Error('launched'); } },
+          firefox: { launchPersistentContext: () => { throw new Error('launched'); } },
+        },
+      },
+    );
+    for (const name of ['chrome', 'edge', 'brave', 'firefox']) {
+      await expect(pool.open('http://127.0.0.1:8000/api/system/stop', name)).rejects.toThrow(
+        /refused/,
+      );
+    }
+    // Four browsers, four refusals, and not one of them started.
+    expect(stub.asked).toHaveLength(4);
   });
 });

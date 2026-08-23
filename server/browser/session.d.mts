@@ -3,9 +3,10 @@
 export interface BrowserConfig {
   enabled: boolean;
   localOnly: boolean;
-  /** ZERO's own profile directory. Never the operator's. */
-  profileDir: string;
-  channel: string;
+  /** Root of ZERO's own profiles; each browser gets a directory beneath it. */
+  profileRoot: string;
+  /** Which browser: chrome, edge, brave, firefox or chromium. */
+  browser: string;
   executablePath: string;
   headless: boolean;
   idleMs: number;
@@ -18,12 +19,21 @@ export interface BrowserConfig {
 
 export interface BrowserStatus {
   provider: string;
-  installed: boolean;
+  browser: string;
+  label: string;
+  /** `chromium` or `firefox` — the one thing no setting can change. */
+  engine: string;
+  channel: string | null;
+  /** True when it drives the browser already on the machine. */
+  uses_installed: boolean;
+  install: string;
+  note: string;
+  playwright: boolean;
+  found: boolean;
   enabled: boolean;
   ready: boolean;
   reason: string | null;
   running: boolean;
-  channel: string;
   headless: boolean;
   /** "configured" or "none" — never the address, which can carry credentials. */
   proxy: string;
@@ -45,6 +55,8 @@ export interface OpenedPage {
 
 export const BROWSER_ERRORS: {
   UNAVAILABLE: string;
+  UNKNOWN: string;
+  NOT_INSTALLED: string;
   DISABLED: string;
   LOCAL_ONLY: string;
   LAUNCH_FAILED: string;
@@ -68,11 +80,34 @@ export function assertAllowed(
   fetchImpl?: typeof fetch,
 ): Promise<boolean>;
 
+export interface SessionOptions {
+  playwright?: unknown;
+  fetchImpl?: typeof fetch;
+  browser?: string;
+}
+
 export class BrowserSession {
-  constructor(config: BrowserConfig, options?: { playwright?: unknown; fetchImpl?: typeof fetch });
+  constructor(config: BrowserConfig, options?: SessionOptions);
   readonly running: boolean;
+  readonly browserName: string;
+  readonly profileDir: string;
   readonly idleMs: number;
   status(): Promise<BrowserStatus>;
   open(url: string): Promise<OpenedPage>;
   close(): Promise<boolean>;
+}
+
+export interface PoolStatus {
+  default: string;
+  browsers: BrowserStatus[];
+  running: string[];
+}
+
+/** One session per browser, launched on demand and closed when idle. */
+export class BrowserPool {
+  constructor(config: BrowserConfig, options?: SessionOptions);
+  session(name?: string): BrowserSession;
+  status(): Promise<PoolStatus>;
+  open(url: string, name?: string): Promise<OpenedPage>;
+  close(name?: string): Promise<string[]>;
 }

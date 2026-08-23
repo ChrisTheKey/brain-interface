@@ -244,7 +244,7 @@ regardless of everything else.
 The panel says `WEB · READ-ONLY` with the scope, or `WEB · OFFLINE`.
 `ZERO_WEB_ALLOW` narrows it to named hosts; `ZERO_WEB_DENY` always wins.
 
-## ZERO driving a real Chrome
+## ZERO driving a real browser
 
 The reader above sees markup. Most of what a lead-research task actually needs
 to look at renders itself in JavaScript, and for that ZERO drives a browser
@@ -254,18 +254,43 @@ have seen.
 ```bash
 # .env.local, read by the gateway
 ZERO_BROWSER_ENABLED=true
+ZERO_BROWSER=chrome    # chrome | edge | brave | firefox | chromium
 npm install            # playwright-core is an optional dependency
 ```
 
-**Its own profile, never yours.** `.zero/browser-profile`, created empty. ZERO
-is never handed your logged-in Chrome, because a browser with your sessions in
-it is a browser that acts as you — your mail, your accounts, your bank — and
-no gate afterwards takes that back. Whatever ZERO logs into is ZERO's, and you
-can delete the directory to forget all of it. There is deliberately no setting
-that points it at your profile.
+**Four browsers, and the honest difference between them.** Chrome, Edge and
+Brave are driven where they already are; Firefox is not, and the status says
+which is which rather than letting you find out at the first navigation:
 
-**It drives the Chrome you already have**, via `channel: chrome`, rather than
-downloading a second one beside it. `ZERO_BROWSER_PATH` overrides that.
+| `ZERO_BROWSER` | What it drives | Needs downloading |
+| --- | --- | --- |
+| `chrome` | the Google Chrome you have | no |
+| `edge` | the Microsoft Edge you have | no |
+| `brave` | the Brave you have, found by path | no |
+| `firefox` | Playwright's own Firefox build | `npx playwright install firefox` |
+| `chromium` | Playwright's own Chromium | `npx playwright install chromium` |
+
+Firefox is the exception on purpose. Playwright drives a patched Firefox, so
+your installed copy is not driveable by it — that is Playwright's design, not
+a missing feature here, and `/api/browser/status` reports it as
+`not_installed` with the exact command rather than claiming a browser it
+cannot start. Chrome and Edge go through `channel`; Brave is a Chromium
+without a channel, so it is located by executable path — the usual install
+locations on Windows, macOS and Linux are checked, and `ZERO_BROWSER_PATH`
+overrides all of it.
+
+`GET /api/browser/status` answers for every one of them at once — installed,
+ready, running — so the panel can show what this particular machine can
+actually do. `POST /api/browser/open` takes an optional `browser` to pick one
+per request; `POST /api/browser/close` closes that one, or all of them.
+
+**Its own profile, never yours.** `.zero/browser-profile/<browser>`, created
+empty, one directory per browser so nothing bleeds between them. ZERO is never
+handed your logged-in Chrome, because a browser with your sessions in it is a
+browser that acts as you — your mail, your accounts, your bank — and no gate
+afterwards takes that back. Whatever ZERO logs into is ZERO's, and you can
+delete the directory to forget all of it. There is deliberately no setting
+that points it at your profile.
 
 **The guard is not reimplemented for it.** HWD-ZERO decides which addresses may
 be read; the gateway asks it before every navigation rather than keeping a
@@ -277,11 +302,11 @@ loopback round trip per image.
 
 Nothing is granted to the page: no microphone, no camera, no location, no
 downloads. The browser closes itself after five idle minutes, because a
-headless Chrome nobody remembers starting is a gigabyte of RAM and a surprise
+headless browser nobody remembers starting is a gigabyte of RAM and a surprise
 in Task Manager.
 
-Desktop only. There is no Chrome to drive on the Galaxy, and the status says
-so instead of the feature silently not being there.
+Desktop only. There is no desktop browser to drive on the Galaxy, and the
+status says so instead of the feature silently not being there.
 
 ## ZERO's voice: Fish Audio (optional, cloud)
 

@@ -36,7 +36,7 @@ import { networkInterfaces } from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadTtsConfig, publicStatus } from './tts/config.mjs';
 import { redact, synthesize } from './tts/fishAudio.mjs';
-import { BrowserSession, loadBrowserConfig } from './browser/session.mjs';
+import { BrowserPool, loadBrowserConfig } from './browser/session.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..');
@@ -505,12 +505,12 @@ export function startGateway(config = readConfig()) {
     return provided !== null && constantTimeEquals(provided, token);
   };
 
-  // One browser for the process. Two would be two Chromes, two profiles and
-  // two things to forget to close.
-  let browser = null;
-  const browserSession = () => {
-    browser ??= new BrowserSession(loadBrowserConfig(process.env, process.cwd()));
-    return browser;
+  // One pool for the process: a session per browser, each launched only when
+  // it is asked for and each closing itself when it goes idle.
+  let browsers = null;
+  const browserPool = () => {
+    browsers ??= new BrowserPool(loadBrowserConfig(process.env, process.cwd()));
+    return browsers;
   };
 
   const handleRequest = (req, res) => {
@@ -658,7 +658,8 @@ export function startGateway(config = readConfig()) {
       browser and reaches the internet from the operator's machine.
     */
     if (url.pathname === '/api/browser/status') {
-      browserSession()
+      // Every browser ZERO knows, and what this machine can do with each.
+      browserPool()
         .status()
         .then((status) => sendJson(res, 200, status))
         .catch((error) => sendJson(res, 500, { error: 'browser_status_failed', detail: error.message }));
@@ -674,7 +675,9 @@ export function startGateway(config = readConfig()) {
             return;
           }
           try {
-            sendJson(res, 200, await browserSession().open(target));
+            // `browser` chooses between Chrome, Edge, Brave and Firefox;
+            // omitted, it is the configured default.
+            sendJson(res, 200, await browserPool().open(target, payload?.browser));
           } catch (error) {
             // A refusal is the runtime's answer, not a fault: 403 so the
             // caller can tell "not allowed" from "did not work".
@@ -690,8 +693,8 @@ export function startGateway(config = readConfig()) {
     }
 
     if (url.pathname === '/api/browser/close' && req.method === 'POST') {
-      browserSession()
-        .close()
+      readJsonBody(req)
+        .then((payload) => browserPool().close(payload?.browser))
         .then((closed) => sendJson(res, 200, { closed }))
         .catch((error) => sendJson(res, 500, { error: 'browser_failed', detail: error.message }));
       return;
