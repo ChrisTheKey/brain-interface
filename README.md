@@ -199,6 +199,51 @@ ZERO-WORKSPACE/
 └── …
 ```
 
+## ZERO reading the web
+
+Until this, the only address ZERO could reach was a local Ollama. It can now
+read the public internet — off by default, because reading the internet is not
+a neutral act: it tells whoever is on the other end that this machine asked,
+and a page ZERO reads is a page that can try to talk it into something.
+
+```bash
+# .env.local, read by HWD-ZERO — the gateway proxies /api/web/* to it
+ZERO_WEB_ENABLED=true
+```
+
+That is enough to read any public URL. **Finding** one is a separate thing:
+search needs a provider, because there is no way to search the web without
+asking somebody. Set `ZERO_WEB_SEARCH=searxng` with a self-hosted instance (no
+key, and it can run on the same machine), or `brave`/`tavily` with a key. Until
+then ZERO reads what you name and says plainly that it cannot look one up.
+
+**Public means public.** The most dangerous thing a fetcher on this machine can
+do is fetch *this machine*: HWD-ZERO answers on `127.0.0.1:8000`, and a page
+that talks ZERO into opening `http://127.0.0.1:8000/api/system/stop` has
+reached straight past every gate in the system. So every hop is resolved and
+checked against the address it actually lands on — including each redirect,
+which is the standard way past a guard that only checks what it was handed.
+Loopback, RFC1918, link-local, cloud metadata endpoints and non-http schemes
+are all refused, and a hostname answering to both a public and a private
+address is refused too.
+
+**No identity travels.** No cookies, no credentials, no JavaScript. What comes
+back is extracted prose with its source attached, size-capped — text for a
+human or a model to read, never a document to execute.
+
+**It leaves a trail.** Every read publishes `zero.web.read` on the event bus
+with the address and the character count; every refusal publishes
+`zero.web.refused` with the reason. The words on the page are not in the
+event — the audit says where ZERO went, not what it was told.
+
+**It is a permission.** `network_read` sits in the same contract as `commit`,
+`push` and `destructive`, denied by default and never inferred from a mission
+whose wording sounded like research. `ZERO_LOCAL_ONLY=true` closes the window
+regardless of everything else.
+
+The panel says `WEB · READ-ONLY` with the scope, or `WEB · OFFLINE`.
+`ZERO_WEB_ALLOW` narrows it to named hosts; `ZERO_WEB_DENY` always wins.
+
 ## ZERO's voice: Fish Audio (optional, cloud)
 
 By default ZERO speaks with the browser's own synthesiser and nothing leaves

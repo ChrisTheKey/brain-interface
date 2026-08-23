@@ -11,6 +11,7 @@ import type { VoiceState } from '../voice/service';
 import type { WakeDiagnostics } from '../voice/wakeSession';
 import type { FishAudioStatus } from '../voice/fishAudioProvider';
 import { ttsSummary } from '../state/useTtsStatus';
+import { webSummary, type WebStatus } from '../state/useWebStatus';
 
 export interface ZeroPanelProps {
   status: ZeroStatusView;
@@ -27,6 +28,8 @@ export interface ZeroPanelProps {
   wake: WakeDiagnostics | null;
   /** Which voice speaks, and whether it is a cloud one. */
   tts: FishAudioStatus | null;
+  /** Whether ZERO can reach the internet, and how far. */
+  web: WebStatus | null;
   /** Development diagnostics only; internal addresses never ship to the LAN. */
   showDiagnostics: boolean;
 }
@@ -47,6 +50,7 @@ export function ZeroPanel({
   onRetry,
   wake,
   tts,
+  web,
   showDiagnostics,
 }: ZeroPanelProps): React.JSX.Element {
   const health = status.health;
@@ -167,6 +171,17 @@ export function ZeroPanel({
         {ttsSummary(tts).note ? (
           <span className="zero-tts-note">{ttsSummary(tts).note}</span>
         ) : null}
+      </p>
+
+      {/*
+        The other direction: not what ZERO sends out to speak, but what it can
+        go and read. Same reason it is on screen — a system that keeps its own
+        counsel and one that talks to strangers should not look identical.
+      */}
+      <p className={`zero-tts zero-tts-${webSummary(web).state === 'READ-ONLY' ? 'cloud' : 'local'}`}>
+        <span className="zero-tts-label">WEB</span>
+        <span className="zero-tts-mode">{webSummary(web).state}</span>
+        <span className="zero-tts-voice">{webSummary(web).detail}</span>
       </p>
 
       {wake ? (
