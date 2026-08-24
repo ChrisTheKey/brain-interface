@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Starts ZERO for laptop + Samsung Galaxy: the gateway binds the LAN, every
-# internal service stays on 127.0.0.1.
+# Starts ZERO for this device + another one over WiFi: the gateway binds the
+# LAN, every internal service stays on 127.0.0.1.
+#
+# This is NOT needed to see the interface on the phone that runs it — for that
+# use start-zero.sh, which stays on loopback. Use this only to reach ZERO from
+# a second device.
 source "$(dirname "${BASH_SOURCE[0]}")/lib-zero.sh"
 zero_require_node
 cd "$ZERO_ROOT"
 
 echo "ZERO PREFLIGHT"
-echo "  host os:   $(zero_os)"
+echo "  host os:   $(zero_os) / $(zero_arch)"
 echo "  total ram: $(zero_total_ram_mb) MB"
 echo "  free ram:  $(zero_free_ram_mb) MB"
 
@@ -26,7 +30,10 @@ else
   echo "  HWD-ZERO:  NOT reachable at $ZERO_API_URL (start it first; the UI will show the error)"
 fi
 
-[ -d dist ] || npm run build
+[ -f dist/index.html ] || zero_build
+
+zero_wake_lock
+trap 'zero_wake_unlock' EXIT INT TERM
 
 ZERO_LAN_MODE=true ZERO_UI_PORT="$ZERO_UI_PORT" ZERO_API_URL="$ZERO_API_URL" \
   node server/gateway.mjs & echo $! > "$ZERO_PID_DIR/gateway.pid"
@@ -40,6 +47,6 @@ else
   echo "STATUS: gateway did not answer" >&2
 fi
 if [ -z "$LAN_IP" ]; then
-  echo "MOBILE: no LAN address detected — connect the laptop to WiFi or start its hotspot."
+  echo "MOBILE: no LAN address detected — connect to WiFi or start the hotspot."
 fi
 wait

@@ -117,6 +117,9 @@ Whenever a ZERO API is missing or fails, the interface adds a note (see
 ## Requirements
 
 - Node.js ≥ 20.19 (Node 22 recommended) and npm
+- Windows, macOS, Linux or **Termux on Android** (ARM64). Termux needs no
+  `sudo`, `systemd`, Docker or WSL — see
+  [`docs/TERMUX_GALAXY_S25.md`](docs/TERMUX_GALAXY_S25.md)
 - A running ZERO backend (the Codex agent runtime in this workspace) reachable
   over WebSocket
 - A Chromium/Firefox/Safari browser with Web Audio support (optional; the brain
@@ -185,25 +188,51 @@ ZERO-WORKSPACE/
 └── …
 ```
 
-## Laptop and Samsung Galaxy access
+## Running it
 
 The gateway is the single origin — port 3000 serves the interface, `/api` and
 `/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
 
 ```bash
 scripts/setup-zero.sh        # once: install, build, create .env.local
-scripts/start-zero.sh        # laptop only  → http://127.0.0.1:3000
-scripts/start-zero-lan.sh    # laptop + phone (prints the real LAN URL + token)
+scripts/start-zero.sh        # this device only → http://localhost:3000
+scripts/start-zero-lan.sh    # + a second device over WiFi (prints the LAN URL + token)
 scripts/status-zero.sh       # what is actually up
+scripts/zero-doctor.sh       # why the interface is not showing
 scripts/stop-zero.sh
 ```
 
 `start-zero-lan.sh` checks RAM, port and HWD-ZERO reachability, then prints the
-**detected** LAN address — never an example IP. The phone opens that URL with
-the `?token=…` it prints; the token is generated on first run into
+**detected** LAN address — never an example IP. The second device opens that URL
+with the `?token=…` it prints; the token is generated on first run into
 `.zero/gateway-token` (0600, git-ignored) and is not part of the bundle.
 
 LAN access is deliberately the boundary: no tunnel, no UPnP, no port forwarding.
+
+### Samsung Galaxy, on the phone itself (Termux)
+
+Termux on Android is a first-class target — ARM64, no `sudo`, no `systemd`, no
+Docker, no WSL. The whole stack runs on the phone and the phone's own browser
+opens it:
+
+```bash
+cd ~/ZERO-WORKSPACE/brain-interface
+bash scripts/setup-termux.sh    # packages, deps, native toolchain, build
+bash scripts/start-zero.sh      # → http://localhost:3000
+```
+
+Same-device access needs no LAN mode and no token: the gateway stays on
+loopback. It binds **both** `127.0.0.1` and `::1`, because Android resolves
+`localhost` to `::1` first — an IPv4-only bind is the usual reason a
+same-device setup shows a blank page.
+
+Full guide, including the workspace layout, the native-toolchain repairs and
+the memory settings: [`docs/TERMUX_GALAXY_S25.md`](docs/TERMUX_GALAXY_S25.md).
+
+### Samsung Galaxy, over WiFi from a laptop
+
+Run `scripts/start-zero-lan.sh` on the laptop and open the URL it prints on the
+phone.
 
 ## Development
 
@@ -244,6 +273,10 @@ deliberate overrides exist:
 PORT=4000 npm run dev          # run on a different port
 HOST=0.0.0.0 npm run dev       # expose it to the local network (phone → laptop)
 ```
+
+The dev server binds one address. On Termux prefer the gateway
+(`scripts/start-zero.sh`), which binds both loopback families and is what makes
+`http://localhost:3000` reliable in the Android browser.
 
 ## Background asset
 

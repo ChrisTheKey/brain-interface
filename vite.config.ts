@@ -8,6 +8,10 @@ import react from '@vitejs/plugin-react';
 // here: the browser talks to it directly over the WebSocket URL from the env.
 const port = Number(process.env.PORT ?? 3000);
 // `HOST=0.0.0.0` exposes the dev server to the local network (phone → laptop).
+// The dev server binds a single address. On Termux, where Android resolves
+// `localhost` to `::1` first, use the gateway (`scripts/start-zero.sh`) instead:
+// it binds both loopback families, which is what makes http://localhost:3000
+// reliable in the phone's browser.
 const host = process.env.HOST ?? '127.0.0.1';
 
 export default defineConfig({

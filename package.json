@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "gateway": "node server/gateway.mjs",
     "gateway:lan": "ZERO_LAN_MODE=true node server/gateway.mjs",
+    "setup:termux": "bash scripts/setup-termux.sh",
+    "doctor": "bash scripts/zero-doctor.sh",
     "typecheck": "tsc -b --force",
     "lint": "eslint .",
     "test": "vitest run",

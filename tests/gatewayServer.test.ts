@@ -88,3 +88,54 @@ describe('gateway server (LAN mode)', () => {
     expect(body).toContain('brain');
   });
 });
+
+describe('gateway server (same-device loopback mode)', () => {
+  let loopback: Server;
+  let loopbackBase: string;
+
+  beforeAll(async () => {
+    const config = readConfig({
+      ZERO_UI_PORT: '0',
+      // No dist directory: a fresh Termux install, before the build.
+      ZERO_UI_DIST: join(workDir, 'not-built'),
+      ZERO_TOKEN_FILE: join(workDir, 'loopback-token'),
+      PREFIX: '/data/data/com.termux/files/usr',
+    });
+    loopback = startGateway(config);
+    await new Promise<void>((resolve) => loopback.once('listening', () => resolve()));
+    const address = loopback.address();
+    loopbackBase = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+  });
+
+  afterAll(() => {
+    loopback?.close();
+  });
+
+  it('trusts the device it runs on — no token, no pairing', async () => {
+    const response = await fetch(`${loopbackBase}/api/gateway/health`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ gateway: 'ok', lanMode: false, authRequired: false });
+    // Reports the host, so the doctor script does not have to guess.
+    expect(body.termux).toBe(true);
+    expect(body.uiBuilt).toBe(false);
+    // Only addresses that really came up are listed.
+    expect(body.addresses).toContain('127.0.0.1');
+    for (const address of body.addresses) expect(['127.0.0.1', '::1']).toContain(address);
+  });
+
+  it('shows a page explaining the missing build instead of a raw JSON error', async () => {
+    const response = await fetch(`${loopbackBase}/`, { headers: { accept: 'text/html' } });
+    expect(response.status).toBe(503);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    const body = await response.text();
+    expect(body).toContain('INTERFACE NOT BUILT');
+    expect(body).toContain('setup-termux.sh');
+  });
+
+  it('still answers API clients with JSON', async () => {
+    const response = await fetch(`${loopbackBase}/`, { headers: { accept: 'application/json' } });
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe('ui_not_built');
+  });
+});

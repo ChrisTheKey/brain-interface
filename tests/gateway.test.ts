@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  bootPage,
   constantTimeEquals,
   createRateLimiter,
   detectLanAddress,
@@ -10,6 +11,7 @@ import {
   loadOrCreateToken,
   readConfig,
   resolveStaticPath,
+  wantsHtml,
 } from '../server/gateway.mjs';
 
 const tempDirs: string[] = [];
@@ -40,6 +42,27 @@ describe('gateway configuration', () => {
 
   it('honours an explicit UI port override', () => {
     expect(readConfig({ ZERO_UI_PORT: '4000' }).port).toBe(4000);
+  });
+
+  it('binds every loopback family so http://localhost:3000 works on Android', () => {
+    // The Galaxy's browser resolves `localhost` to ::1 first. Binding only
+    // 127.0.0.1 is what makes the page come up blank on the phone that is
+    // running the gateway.
+    const config = readConfig({});
+    expect(config.host).toBe('127.0.0.1');
+    expect(config.extraHosts).toEqual(['::1']);
+  });
+
+  it('never widens LAN mode to IPv6 — the wildcard bind stays a single address', () => {
+    const config = readConfig({ ZERO_LAN_MODE: 'true' });
+    expect(config.host).toBe('0.0.0.0');
+    expect(config.extraHosts).toEqual([]);
+  });
+
+  it('reports the host it is running on', () => {
+    const termux = readConfig({ PREFIX: '/data/data/com.termux/files/usr' });
+    expect(termux.runtime.termux).toBe(true);
+    expect(readConfig({}).runtime.termux).toBe(false);
   });
 });
 
@@ -105,5 +128,24 @@ describe('LAN address detection', () => {
 
   it('returns null when the laptop has no network', () => {
     expect(detectLanAddress({ lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }] })).toBeNull();
+  });
+});
+
+describe('boot page', () => {
+  it('answers a browser with a page and an API client with JSON', () => {
+    expect(wantsHtml({ headers: { accept: 'text/html,application/xhtml+xml' } })).toBe(true);
+    expect(wantsHtml({ headers: { accept: 'application/json' } })).toBe(false);
+    expect(wantsHtml({ headers: {} })).toBe(false);
+  });
+
+  it('tells a Termux user the command that builds the interface', () => {
+    const page = bootPage(readConfig({ PREFIX: '/data/data/com.termux/files/usr' }));
+    expect(page).toContain('<!doctype html>');
+    expect(page).toContain('scripts/setup-termux.sh');
+    expect(page).toContain('termux');
+  });
+
+  it('gives a desktop user the desktop command instead', () => {
+    expect(bootPage(readConfig({}))).toContain('npm run build');
   });
 });

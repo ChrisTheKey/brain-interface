@@ -80,6 +80,7 @@ orchestration cannot disagree.
 
 | Service | Address | On the LAN? |
 | --- | --- | --- |
+| ZERO Gateway | `127.0.0.1:3000` + `[::1]:3000` | no |
 | ZERO Gateway | `0.0.0.0:3000` only with `ZERO_LAN_MODE=true` | yes, with a token |
 | HWD-ZERO API | `127.0.0.1:8000` | no |
 | Ollama | `127.0.0.1:11434` | no |
@@ -87,11 +88,20 @@ orchestration cannot disagree.
 
 No tunnels, no UPnP, no port forwarding. LAN is the boundary.
 
+The gateway binds both loopback families in its default mode. That is what
+makes `http://localhost:3000` work in the Android browser when the whole stack
+runs on the same phone under Termux: Android resolves `localhost` to `::1`
+before `127.0.0.1`, so an IPv4-only bind can be unreachable from the very
+device that is serving it. Both addresses are loopback — this widens nothing.
+LAN mode is unchanged and remains a single, explicit `0.0.0.0` bind; it is not
+needed for same-device operation.
+
 ## Authentication
 
 On first start the gateway generates a 256-bit token, writes it to
 `.zero/gateway-token` with `0600` and prints a pairing URL. On loopback the
-laptop's own browser is trusted; every LAN request needs the token (header,
+device's own browser is trusted — including the phone's, when ZERO runs on it
+under Termux; every LAN request needs the token (header,
 cookie or `?token=`). `POST /api/gateway/session` exchanges the token for a
 cookie so the phone stays paired. Requests are rate limited per client address.
 The token is never part of the frontend bundle.

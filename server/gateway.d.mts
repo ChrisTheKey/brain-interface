@@ -1,9 +1,15 @@
 /** Types for the gateway, which is plain Node ESM so it needs no build step. */
 
+import type { HostRuntime } from './platform.mjs';
+
 export interface GatewayConfig {
   port: number;
+  /** The first address bound; `0.0.0.0` only in LAN mode. */
   host: string;
+  /** Further addresses bound to the same port (the IPv6 loopback). */
+  extraHosts: string[];
   lanMode: boolean;
+  runtime: HostRuntime;
   zeroApi: string;
   distDir: string;
   tokenFile: string;
@@ -34,4 +40,8 @@ export declare function createRateLimiter(
   now?: () => number,
 ): (key: string) => boolean;
 export declare function resolveStaticPath(distDir: string, urlPath: string): string | null;
+export declare function wantsHtml(req: {
+  headers: Record<string, string | string[] | undefined>;
+}): boolean;
+export declare function bootPage(config: GatewayConfig): string;
 export declare function startGateway(config?: GatewayConfig): import('node:http').Server;
