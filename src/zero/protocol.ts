@@ -326,6 +326,83 @@ export interface ListMcpServerStatusResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* MCP provisioning: writing ZERO's config and signing in to a server          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One `[mcp_servers.<name>]` entry as ZERO's config expects it. Exactly one
+ * transport is set: `command` for stdio, `url` for streamable HTTP — ZERO
+ * rejects an entry that mixes them.
+ */
+export interface McpServerConfigEntry {
+  /** stdio transport. */
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** Environment variables forwarded from ZERO's own environment, by name. */
+  env_vars?: string[];
+  cwd?: string;
+  /** streamable HTTP transport. */
+  url?: string;
+  bearer_token_env_var?: string;
+  http_headers?: Record<string, string>;
+  env_http_headers?: Record<string, string>;
+  /** shared. */
+  enabled?: boolean;
+  startup_timeout_sec?: number;
+  tool_timeout_sec?: number;
+  enabled_tools?: string[];
+  disabled_tools?: string[];
+  /** OAuth scopes requested by `mcpServer/oauth/login`. */
+  scopes?: string[];
+  oauth_resource?: string;
+}
+
+/** `replace` overwrites the value at the path; `upsert` merges into it. */
+export type MergeStrategy = 'replace' | 'upsert';
+
+export interface ConfigEdit {
+  /** Dotted path into config.toml, e.g. `mcp_servers.gmail`. */
+  keyPath: string;
+  value: unknown;
+  mergeStrategy: MergeStrategy;
+}
+
+export interface ConfigBatchWriteParams {
+  edits: ConfigEdit[];
+  /** Defaults to the user's own config.toml; ZERO refuses any other file. */
+  filePath?: string;
+  expectedVersion?: string;
+}
+
+export interface ConfigWriteResponse {
+  status: 'ok' | 'okOverridden';
+  version: string;
+  filePath: string;
+  overriddenMetadata?: {
+    message: string;
+    effectiveValue: unknown;
+  } | null;
+}
+
+export interface McpServerOauthLoginParams {
+  name: string;
+  scopes?: string[];
+  timeoutSecs?: number;
+}
+
+export interface McpServerOauthLoginResponse {
+  /** The URL the operator has to open to authorize the server. */
+  authorizationUrl: string;
+}
+
+export interface McpServerOauthLoginCompletedNotification {
+  name: string;
+  success: boolean;
+  error?: string;
+}
+
+/* -------------------------------------------------------------------------- */
 /* apps (connectors)                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -428,6 +505,10 @@ export const ZERO_METHODS = {
   threadUnsubscribe: 'thread/unsubscribe',
   skillsList: 'skills/list',
   mcpServerStatusList: 'mcpServerStatus/list',
+  configBatchWrite: 'config/batchWrite',
+  configValueWrite: 'config/value/write',
+  mcpServerReload: 'config/mcpServer/reload',
+  mcpServerOauthLogin: 'mcpServer/oauth/login',
   appList: 'app/list',
   realtimeStart: 'thread/realtime/start',
   realtimeAppendText: 'thread/realtime/appendText',

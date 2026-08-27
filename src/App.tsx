@@ -5,9 +5,14 @@ import { NodeTooltip } from './ui/NodeTooltip';
 import { OperatorPanel } from './ui/OperatorPanel';
 import { StatusBar } from './ui/StatusBar';
 import { VoiceBar } from './ui/VoiceBar';
+import { VoiceMode } from './ui/VoiceMode';
+import { IntegrationsPanel } from './ui/IntegrationsPanel';
 import { useZeroBrain } from './state/useZeroBrain';
 import { useZeroVoiceLoop } from './state/useZeroVoiceLoop';
+import { useIntegrations } from './state/useIntegrations';
+import { useBrowserBridge } from './state/useBrowserBridge';
 import { useOperator } from './state/useOperator';
+import { useRoute } from './state/useRoute';
 import { HwdZeroClient } from './hwd/client';
 import { config } from './config';
 import type { GraphNode } from './graph/model';
@@ -19,6 +24,7 @@ export default function App(): React.JSX.Element {
   // loopback, so the operator needs no address and no credential here.
   const [operatorClient] = useState(() => new HwdZeroClient());
   const operator = useOperator(operatorClient);
+  const { route, navigate } = useRoute();
 
   // Runtime facts about agent runs feed back into the graph, so an agent node
   // is `active` exactly while its ZERO thread runs.
@@ -74,6 +80,19 @@ export default function App(): React.JSX.Element {
     onAgentActivity: handleAgentActivity,
   });
 
+  // ZERO's internet access: the gateway reports which browsers exist here and
+  // which one is running, and it is the only place that knows where this
+  // interface is installed — which the browser MCP entry needs.
+  const browserBridge = useBrowserBridge();
+  const integrations = useIntegrations(brain.client, browserBridge.features);
+
+  // Voice mode is opened by a click, which is the gesture the AudioContext
+  // needs anyway — so ZERO can answer out loud from the first turn.
+  const startVoiceMode = useCallback(() => {
+    navigate('voice');
+    if (config.voiceMode.autoStart) voice.startConversation();
+  }, [navigate, voice]);
+
   const selectedNode = useMemo(
     () => brain.graph.nodes.find((node) => node.id === selectedId) ?? null,
     [brain.graph, selectedId],
@@ -97,6 +116,40 @@ export default function App(): React.JSX.Element {
     setSelectedId(node?.id ?? null);
   }, []);
 
+  if (route === 'voice') {
+    return (
+      <div className="app app-voice">
+        <div
+          className="background"
+          style={{ backgroundImage: `url(${config.backgroundImage})` }}
+          aria-hidden="true"
+        />
+        <VoiceMode
+          state={voice.state}
+          listening={voice.listening}
+          conversationActive={voice.conversationActive}
+          speechSupported={voice.speechSupported}
+          transcript={voice.transcript}
+          answer={voice.answer}
+          error={voice.error ?? brain.connectionError}
+          activeAgents={voice.activeAgentIds}
+          voiceProviderId={brain.voiceProviderId}
+          voiceReason={brain.voiceReason}
+          connection={brain.connection}
+          micLevel={voice.micLevel}
+          levels={brain.levels}
+          onToggleConversation={voice.toggleConversation}
+          onPushToTalk={voice.startListening}
+          onSubmitText={voice.submitText}
+          onExit={() => {
+            voice.stopConversation();
+            navigate('brain');
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <div
@@ -115,6 +168,7 @@ export default function App(): React.JSX.Element {
         onHover={handleHover}
       />
       <OperatorPanel operator={operator} />
+      <IntegrationsPanel integrations={integrations} browser={browserBridge} />
       <NodeTooltip node={hovered.node} position={hovered.position} />
       <DetailPanel
         node={selectedNode}
@@ -137,6 +191,7 @@ export default function App(): React.JSX.Element {
         activeAgents={voice.activeAgentIds}
         onToggleListening={voice.startListening}
         onSubmitText={voice.submitText}
+        onEnterVoiceMode={startVoiceMode}
       />
       <StatusBar
         connection={brain.connection}

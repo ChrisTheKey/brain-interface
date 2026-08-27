@@ -19,6 +19,12 @@
  *   - LAN access requires a token that is generated on first run, stored with
  *     0600 permissions outside the repository and never baked into the bundle.
  *   - No tunnels, no UPnP, no port forwarding — LAN is as far as this goes.
+ *
+ * Two upstreams live in this process rather than behind it, because both hold
+ * a credential or a process the browser must never touch directly:
+ *
+ *     /api/voice/fish/*   → Fish Audio  (the API key stays here)
+ *     /api/browser/*      → the browser bridge (Chrome, Firefox, Brave, Edge)
  */
 import { createServer } from 'node:http';
 import { connect as netConnect } from 'node:net';
@@ -27,6 +33,8 @@ import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { BrowserBridge, readBrowserConfig, BlockedUrlError } from './browser/bridge.mjs';
+import { fishStatus, listVoices, readFishConfig, requestSpeech, FishRequestError } from './fishAudio.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..');
@@ -64,7 +72,50 @@ export function readConfig(env = process.env) {
     tokenFile: env.ZERO_TOKEN_FILE ?? join(projectRoot, '.zero', 'gateway-token'),
     // Requests per minute per client address.
     rateLimit: Number(env.ZERO_RATE_LIMIT ?? 240),
+    fish: readFishConfig(env),
+    browser: readBrowserConfig(env),
+    /** Largest JSON body the gateway's own endpoints accept. */
+    maxBodyBytes: Number(env.ZERO_MAX_BODY_BYTES ?? 256 * 1024),
   };
+}
+
+/** Reads a JSON request body, refusing anything oversized or malformed. */
+export function readJsonBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new HttpError('request body too large', 413));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', (error) => reject(new HttpError(error.message, 400)));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
+      if (raw.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        resolve(parsed && typeof parsed === 'object' ? parsed : {});
+      } catch {
+        reject(new HttpError('request body is not valid JSON', 400));
+      }
+    });
+  });
+}
+
+export class HttpError extends Error {
+  constructor(message, status = 500) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
 }
 
 /** Loads the access token, generating one on first run. */
@@ -208,9 +259,136 @@ function proxyUpgrade(req, socket, head, target, pathname, search) {
   socket.on('error', () => client.destroy());
 }
 
+/**
+ * Fish Audio routes. The key never leaves this process: the browser posts
+ * text to its own origin and receives audio back.
+ */
+async function handleFishRoute(req, res, url, config) {
+  if (url.pathname === '/api/voice/fish/status' && req.method === 'GET') {
+    sendJson(res, 200, fishStatus(config.fish));
+    return true;
+  }
+
+  if (url.pathname === '/api/voice/fish/voices' && req.method === 'GET') {
+    const voices = await listVoices(config.fish, url.searchParams.get('q') ?? '');
+    sendJson(res, 200, { data: voices });
+    return true;
+  }
+
+  if (url.pathname === '/api/voice/fish/speak' && req.method === 'POST') {
+    const body = await readJsonBody(req, config.maxBodyBytes);
+    const { response, format, sampleRate, release } = await requestSpeech(body, config.fish);
+    res.writeHead(200, {
+      // The provider needs the wire format to decode PCM without guessing.
+      'content-type': response.headers.get('content-type') ?? contentTypeFor(format),
+      'x-zero-audio-format': format,
+      'x-zero-audio-sample-rate': String(sampleRate),
+      'cache-control': 'no-store',
+    });
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      release();
+      res.end();
+      return true;
+    }
+    // The client hanging up must stop the upstream read, not leak it.
+    let aborted = false;
+    res.on('close', () => {
+      aborted = true;
+      void reader.cancel().catch(() => undefined);
+    });
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || aborted) break;
+        if (value?.length && !res.write(Buffer.from(value))) {
+          await new Promise((resolve) => res.once('drain', resolve));
+        }
+      }
+    } finally {
+      release();
+      res.end();
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function contentTypeFor(format) {
+  switch (format) {
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'wav':
+      return 'audio/wav';
+    case 'opus':
+      return 'audio/ogg';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+/**
+ * Browser-bridge routes: this is ZERO's access to the internet, through the
+ * operator's own Chrome, Firefox, Brave or Edge.
+ */
+async function handleBrowserRoute(req, res, url, config, bridge) {
+  if (url.pathname === '/api/browser/status' && req.method === 'GET') {
+    sendJson(res, 200, bridge.status());
+    return true;
+  }
+  if (!url.pathname.startsWith('/api/browser/')) return false;
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'method_not_allowed' });
+    return true;
+  }
+
+  const body = await readJsonBody(req, config.maxBodyBytes);
+
+  switch (url.pathname) {
+    case '/api/browser/launch':
+      sendJson(res, 200, { active: await bridge.launch(body.browser) });
+      return true;
+    case '/api/browser/open':
+      sendJson(res, 200, await bridge.open(body.url, body));
+      return true;
+    case '/api/browser/read':
+      sendJson(res, 200, await bridge.read(body));
+      return true;
+    case '/api/browser/search':
+      sendJson(res, 200, await bridge.search(body.query, body));
+      return true;
+    case '/api/browser/close':
+      sendJson(res, 200, await bridge.close());
+      return true;
+    default:
+      sendJson(res, 404, { error: 'unknown_browser_route', path: url.pathname });
+      return true;
+  }
+}
+
+/** Maps a handler failure onto a status the interface can act on. */
+function sendRouteError(res, error) {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  if (error instanceof BlockedUrlError) {
+    sendJson(res, 403, { error: 'url_blocked', message: error.message, url: error.url });
+    return;
+  }
+  if (error instanceof FishRequestError || error instanceof HttpError) {
+    sendJson(res, error.status, { error: error.name, message: error.message });
+    return;
+  }
+  sendJson(res, 500, { error: 'gateway_error', message: error?.message ?? 'unknown error' });
+}
+
 export function startGateway(config = readConfig()) {
   const token = loadOrCreateToken(config.tokenFile);
   const allow = createRateLimiter(config.rateLimit);
+  const bridge = new BrowserBridge(config.browser);
 
   const authorize = (req, url) => {
     // On loopback the laptop's own browser is trusted; the LAN never is.
@@ -231,11 +409,34 @@ export function startGateway(config = readConfig()) {
     }
 
     if (PUBLIC_PATHS.has(url.pathname)) {
+      // The probe is public so the pairing screen can render before a token
+      // exists. What this gateway *contains* — the installed browsers, the
+      // install path of the MCP server — is not public: it is added only for a
+      // caller that is already allowed in.
       sendJson(res, 200, {
         gateway: 'ok',
         lanMode: config.lanMode,
         zeroApi: config.zeroApi,
         authRequired: config.lanMode,
+        ...(authorize(req, url)
+          ? {
+              // What this gateway can do beyond proxying, so the interface never
+              // has to probe an endpoint to find out whether it exists.
+              features: {
+                fishAudio: config.fish.configured,
+                browser: bridge
+                  .status()
+                  .browsers.filter((browser) => browser.installed)
+                  .map((browser) => browser.id),
+                // The exact command ZERO needs in `[mcp_servers.zero_browser]`.
+                // The gateway knows where it is installed; the browser does not.
+                browserMcp: {
+                  command: process.execPath,
+                  args: [join(projectRoot, 'mcp', 'brain-browser-server.mjs')],
+                },
+              },
+            }
+          : {}),
       });
       return;
     }
@@ -271,6 +472,20 @@ export function startGateway(config = readConfig()) {
         'set-cookie',
         `zero_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
       );
+    }
+
+    // The gateway's own endpoints are served here; everything else under
+    // /api belongs to HWD-ZERO and is proxied on loopback.
+    if (url.pathname.startsWith('/api/voice/fish/') || url.pathname.startsWith('/api/browser/')) {
+      const handle = url.pathname.startsWith('/api/browser/')
+        ? handleBrowserRoute(req, res, url, config, bridge)
+        : handleFishRoute(req, res, url, config);
+      void handle
+        .then((handled) => {
+          if (!handled) sendJson(res, 404, { error: 'unknown_route', path: url.pathname });
+        })
+        .catch((error) => sendRouteError(res, error));
+      return;
     }
 
     if (url.pathname.startsWith('/api/')) {
@@ -309,6 +524,12 @@ export function startGateway(config = readConfig()) {
     proxyUpgrade(req, socket, head, config.zeroApi, url.pathname, url.search);
   });
 
+  // The bridge owns a real browser process; it must not outlive the gateway.
+  server.on('close', () => {
+    void bridge.close();
+  });
+  server.browserBridge = bridge;
+
   server.listen(config.port, config.host, () => {
     const lan = detectLanAddress();
     process.stdout.write('\nZERO GATEWAY ONLINE\n\n');
@@ -323,7 +544,17 @@ export function startGateway(config = readConfig()) {
       process.stdout.write('MOBILE:   disabled (start with ZERO_LAN_MODE=true)\n');
     }
     process.stdout.write(`ZERO API: ${config.zeroApi} (loopback only)\n`);
-    process.stdout.write(`TOKEN:    ${config.tokenFile}\n\n`);
+    process.stdout.write(`TOKEN:    ${config.tokenFile}\n`);
+    process.stdout.write(
+      `VOICE:    Fish Audio ${config.fish.configured ? `ready (${config.fish.model})` : 'off (set FISH_AUDIO_API_KEY)'}\n`,
+    );
+    const installed = bridge
+      .status()
+      .browsers.filter((browser) => browser.installed)
+      .map((browser) => browser.id);
+    process.stdout.write(
+      `BROWSER:  ${installed.length > 0 ? installed.join(', ') : 'none detected'}\n\n`,
+    );
   });
 
   return server;

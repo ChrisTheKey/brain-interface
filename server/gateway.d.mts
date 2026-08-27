@@ -1,4 +1,6 @@
 /** Types for the gateway, which is plain Node ESM so it needs no build step. */
+import type { BrowserBridge, BrowserBridgeConfig } from './browser/bridge.d.mts';
+import type { FishConfig } from './fishAudio.d.mts';
 
 export interface GatewayConfig {
   port: number;
@@ -8,6 +10,12 @@ export interface GatewayConfig {
   distDir: string;
   tokenFile: string;
   rateLimit: number;
+  /** Fish Audio, which the gateway proxies so the key stays out of the bundle. */
+  fish: FishConfig;
+  /** The browser bridge — ZERO's internet access. */
+  browser: BrowserBridgeConfig;
+  /** Largest JSON body the gateway's own endpoints accept. */
+  maxBodyBytes: number;
 }
 
 export interface NetworkInterfaceEntry {
@@ -34,4 +42,18 @@ export declare function createRateLimiter(
   now?: () => number,
 ): (key: string) => boolean;
 export declare function resolveStaticPath(distDir: string, urlPath: string): string | null;
-export declare function startGateway(config?: GatewayConfig): import('node:http').Server;
+
+export declare class HttpError extends Error {
+  constructor(message: string, status?: number);
+  readonly status: number;
+}
+
+export declare function readJsonBody(
+  req: import('node:http').IncomingMessage,
+  maxBytes: number,
+): Promise<Record<string, unknown>>;
+
+/** The server also carries the browser bridge it owns, so it can be closed. */
+export declare function startGateway(
+  config?: GatewayConfig,
+): import('node:http').Server & { browserBridge: BrowserBridge };

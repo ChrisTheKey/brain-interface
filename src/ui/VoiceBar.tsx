@@ -16,6 +16,8 @@ export interface VoiceBarProps {
   activeAgents: string[];
   onToggleListening: () => void;
   onSubmitText: (text: string) => void;
+  /** Opens the hands-free conversation at `/voice`. */
+  onEnterVoiceMode: () => void;
 }
 
 const STATE_LABEL: Record<ConversationState, string> = {
@@ -37,6 +39,7 @@ export function VoiceBar({
   activeAgents,
   onToggleListening,
   onSubmitText,
+  onEnterVoiceMode,
 }: VoiceBarProps): React.JSX.Element {
   const [draft, setDraft] = useState('');
 
@@ -56,6 +59,15 @@ export function VoiceBar({
       >
         <span className="mic-dot" aria-hidden="true" />
         {listening ? 'listening…' : 'speak'}
+      </button>
+
+      <button
+        type="button"
+        className="voice-mode-link"
+        onClick={onEnterVoiceMode}
+        title="Voice mode: keep talking to ZERO without touching the machine"
+      >
+        voice mode
       </button>
 
       <span className={`conversation-state state-${state}`}>ZERO {STATE_LABEL[state]}</span>
