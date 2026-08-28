@@ -15,6 +15,15 @@ brain-interface   (this repository — data adapter + graph transform + renderin
 Browser
 ```
 
+Two things reach outward from this repository rather than inward from ZERO,
+and both go through the gateway so no credential and no local service is ever
+exposed to the page:
+
+```
+gateway ──▶ Fish Audio          ZERO's spoken voice   (the API key stays here)
+gateway ──▶ Chrome | Firefox | Brave | Edge   ──▶ the internet
+```
+
 ZERO sits in the geometric centre as the orchestrator — and it is the
 operative centre, not just the visual one: it hears you, decides which of your
 agents is needed, starts a real thread in that agent's workspace, watches it
@@ -53,7 +62,12 @@ a fixed set of entities, and no production data is mocked.
 | Graph | `src/graph/transform.ts` | Turns a ZERO snapshot into nodes/edges (UI abstraction only) |
 | Layout | `src/graph/layout.ts` | Hybrid radial + force relaxation in polar space |
 | Render | `src/render/brainRenderer.ts`, `src/render/smoke.ts` | Canvas 2D brain, activity pulses, audio-reactive smoke |
-| Voice | `src/voice/*` | Provider abstraction, ZERO realtime provider, browser fallback |
+| Voice | `src/voice/*` | Provider abstraction, ZERO realtime provider, Fish Audio provider, browser fallback |
+| Voice mode | `src/ui/VoiceMode.tsx`, `src/state/useRoute.ts` | `/voice` — the hands-free conversation, nothing else on screen |
+| Fish Audio | `server/fishAudio.mjs` | Gateway-side Fish Audio proxy; the API key never reaches the browser |
+| Browser bridge | `server/browser/*` | Drives Chrome, Brave and Edge over CDP and Firefox over WebDriver BiDi; URL policy |
+| Browser MCP | `mcp/brain-browser-server.mjs` | Hands the bridge to ZERO as tools, so ZERO can reach the internet |
+| Integrations | `src/mcp/catalog.ts`, `src/mcp/provisioning.ts` | Meta Ads, Google Ads, Gmail and ZERO Browser — declared, then written into ZERO's own config |
 | Audio | `src/audio/analyser.ts` | Web Audio analysis (amplitude, bands, onsets) driving the smoke |
 
 ### Which ZERO APIs are used
@@ -74,6 +88,8 @@ a fixed set of entities, and no production data is mocked.
 | Connectors | `app/list` (+ `app/list/updated`) |
 | Live activity | `turn/started`, `turn/completed`, `item/started`, `item/completed`, `thread/tokenUsage/updated`, `error` |
 | Voice | `thread/realtime/start`, `thread/realtime/appendText`, `thread/realtime/outputAudio/delta`, `thread/realtime/stop` |
+| Registering an MCP server | `config/batchWrite` / `config/value/write` (`mcp_servers.<id>`) + `config/mcpServer/reload` |
+| Signing in to an MCP server | `mcpServer/oauth/login` (+ `mcpServer/oauthLogin/completed`) |
 
 ### What counts as an agent
 
@@ -121,6 +137,10 @@ Whenever a ZERO API is missing or fails, the interface adds a note (see
   over WebSocket
 - A Chromium/Firefox/Safari browser with Web Audio support (optional; the brain
   runs without audio)
+- For ZERO's internet access: Chrome, Firefox, Brave or Edge installed on the
+  machine that runs the gateway (optional)
+- For the Fish Audio voice: a Fish Audio API key on the gateway (optional)
+- For the Google Ads integration: `pipx` (optional)
 
 ## Installation
 
@@ -138,7 +158,7 @@ credential.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VITE_ZERO_WS_URL` | `ws://127.0.0.1:8787` | ZERO app-server WebSocket endpoint |
+| `VITE_ZERO_WS_URL` | `ws://127.0.0.1:8787` | ZERO app-server endpoint. `/zero-ws` routes it through the gateway (required for the phone) |
 | `VITE_ZERO_CLIENT_NAME` | `brain_interface` | Client name sent in `initialize` |
 | `VITE_ZERO_CLIENT_VERSION` | `0.1.0` | Client version sent in `initialize` |
 | `VITE_ZERO_EXPERIMENTAL_API` | `true` | Opt into ZERO's experimental API (required for realtime voice) |
@@ -146,13 +166,25 @@ credential.
 | `VITE_ZERO_THREAD_LIMIT` | `40` | Threads requested per source kind |
 | `VITE_ZERO_REFRESH_INTERVAL_MS` | `20000` | Structural refresh interval |
 | `VITE_ZERO_BACKGROUND_IMAGE` | `/assets/brain-background.png` | Fullscreen background asset |
-| `VITE_ZERO_VOICE_PROVIDER` | `zero-realtime` | `zero-realtime` \| `speech-synthesis` \| `none` |
+| `VITE_ZERO_VOICE_PROVIDER` | `zero-realtime` | `zero-realtime` \| `fish-audio` \| `speech-synthesis` \| `none` |
 | `VITE_ZERO_VOICE_NAMES` | – | Preferred platform voices (fallback provider only) |
 | `VITE_ZERO_VOICE_RATE` | `0.92` | Speech rate |
 | `VITE_ZERO_VOICE_PITCH` | `0.82` | Speech pitch |
 | `VITE_ZERO_VOICE_VOLUME` | `1` | Speech volume |
 | `VITE_ZERO_VOICE_SPEAK_AGENT_MESSAGES` | `false` | Speak ZERO's completed agent messages automatically |
 | `VITE_ZERO_VOICE_PROMPT` | built-in ZERO persona | Session prompt describing ZERO's voice character (realtime provider) |
+| `VITE_ZERO_FISH_VOICE_ID` | – | Fish Audio voice model; empty uses the model's own speaker |
+| `VITE_ZERO_FISH_MODEL` | `s2.1-pro` | Fish Audio model |
+| `VITE_ZERO_FISH_FORMAT` | `pcm` | `pcm` streams through the audio graph; `mp3`/`wav`/`opus` are decoded whole |
+| `VITE_ZERO_FISH_LATENCY` | `balanced` | `normal` \| `balanced` \| `low` |
+| `VITE_ZERO_VOICE_MODE_CONTINUOUS` | `true` | Keep listening after every answer in `/voice` |
+| `VITE_ZERO_VOICE_MODE_RESTART_MS` | `600` | Pause before the microphone re-opens |
+| `VITE_ZERO_VOICE_MODE_AUTOSTART` | `false` | Start the conversation as soon as `/voice` opens |
+| `VITE_ZERO_BROWSER` | `chrome` | Browser the bridge uses by default |
+
+Gateway-only variables (never in the bundle): `FISH_AUDIO_API_KEY`,
+`FISH_AUDIO_*`, `ZERO_BROWSER_*`, `ZERO_GATEWAY_URL`. All of them are
+documented in `.env.example`.
 
 ## The agent network
 
@@ -187,8 +219,39 @@ ZERO-WORKSPACE/
 
 ## Laptop and Samsung Galaxy access
 
-The gateway is the single origin — port 3000 serves the interface, `/api` and
-`/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
+The gateway is the single origin — port 3000 serves the interface, `/api`,
+`/ws` and `/zero-ws`; HWD-ZERO, the ZERO app-server, Ollama and every child
+agent stay on `127.0.0.1`.
+
+### Reaching ZERO from a second device
+
+`VITE_ZERO_WS_URL` is resolved **in the browser**. `ws://127.0.0.1:8787` on a
+phone therefore means the *phone's* own loopback, not the laptop's — which is
+why a phone shows `ZERO disconnected` even while the interface itself loads
+fine. Set the endpoint to the gateway path instead:
+
+```bash
+VITE_ZERO_WS_URL=/zero-ws     # then: npm run build
+```
+
+```
+phone browser ──ws://<laptop>:3000/zero-ws──▶ gateway ──▶ 127.0.0.1:8787
+                        (token required)                  (never leaves loopback)
+```
+
+The gateway carries the connection, so:
+
+- the app-server keeps binding loopback only — it is never exposed to the LAN,
+  which matters because it can start threads and run commands;
+- the upgrade needs the same token as every other route, so a device that has
+  not paired is refused with `401`;
+- the pairing token is stripped before anything travels upstream — ZERO never
+  sees the gateway's own credential;
+- `wss://` is used automatically when the page itself is served over https.
+
+The alternative — binding the app-server to `0.0.0.0` and pointing the phone
+straight at it — works too, and is what this route exists to avoid: it would
+put an unauthenticated command-execution endpoint on the network.
 
 ```bash
 scripts/setup-zero.sh        # once: install, build, create .env.local
@@ -204,6 +267,82 @@ the `?token=…` it prints; the token is generated on first run into
 `.zero/gateway-token` (0600, git-ignored) and is not part of the bundle.
 
 LAN access is deliberately the boundary: no tunnel, no UPnP, no port forwarding.
+
+## Harness Open Source as the home
+
+The repository, the pipeline and the image live on
+[Harness Open Source](https://github.com/harness/harness) — self-hosted, one
+container:
+
+```
+push ──▶ .harness/brain-interface.yaml ──▶ verify ──▶ image ──▶ Harness registry
+                                                                      │
+                                                   docker compose ◀───┘
+```
+
+### The port collision, first
+
+Harness listens on **3000**. So does the Brain Interface gateway, and for it
+that is a hard requirement. Inside their own containers both are fine; they
+only collide on the host, so the interface is published on **3001**:
+
+| | |
+| --- | --- |
+| `http://<host>:3000` | Harness — repository, pipeline, registry |
+| `http://<host>:3001` | the Brain Interface |
+
+Nothing has to be rebuilt for the different port: `VITE_ZERO_WS_URL=/zero-ws`
+is resolved against the origin that served the page, port included.
+
+### The pipeline
+
+`.harness/brain-interface.yaml` is a v1 pipeline. Add it under **Pipelines**
+with exactly that config path. It runs what a contributor runs locally —
+`npm ci`, `typecheck`, `lint`, `test`, `build` — and then, only when the
+`registry` input is set, builds and pushes the image.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `registry` | – | Harness registry host. Empty means verify only, no image |
+| `image_name` | `brain-interface` | Repository inside the registry |
+| `node_image` | `node:22-alpine` | Node the verification runs in |
+
+The push needs two secrets in Harness, `registry_username` and
+`registry_password`.
+
+### The image
+
+`Dockerfile` builds in two stages. The interface compiles to static files and
+the gateway is plain Node ESM on built-in modules only, so **the runtime image
+carries no `node_modules` at all** — Node, the bundle, the server. Chromium is
+installed because it *is* ZERO's internet access; the browser bridge drives it
+over the DevTools Protocol, so the browser tools work without a browser on the
+host.
+
+The `VITE_*` values are build arguments, not runtime environment — Vite bakes
+them into the bundle, so changing the voice provider or the agent root means
+building the image again:
+
+```bash
+docker build -t brain-interface \
+  --build-arg VITE_ZERO_WS_URL=/zero-ws \
+  --build-arg VITE_ZERO_VOICE_PROVIDER=fish-audio \
+  --build-arg VITE_ZERO_FISH_VOICE_ID=<voice> .
+```
+
+Everything the gateway itself reads — the Fish Audio key, the browser policy,
+the upstream addresses — stays runtime environment and never enters the image.
+
+### Running both
+
+```bash
+FISH_AUDIO_API_KEY=… docker compose -f docker-compose.harness.yml up -d
+```
+
+ZERO's app-server runs on the host, not in a container, so the compose file
+points the gateway at `host.docker.internal:8787` and carries it on
+`/zero-ws`. The phone opens `http://<host>:3001/?token=…` and reaches ZERO
+through that one authenticated origin.
 
 ## Development
 
@@ -277,6 +416,44 @@ Activating the microphone while ZERO speaks stops the output first (barge-in).
 If the browser has no SpeechRecognition engine, the microphone button is
 disabled and the text field next to it drives the identical pipeline.
 
+## Voice mode — `/voice`
+
+`/voice` is the interface with everything else taken away: one orb, what ZERO
+heard, what ZERO answered. Open it from the **voice mode** button in the
+conversation strip, or go to `http://127.0.0.1:3000/voice` directly.
+
+```
+        start conversation
+                ↓
+   listening ──▶ ZERO routes ──▶ agents run ──▶ ZERO speaks ──┐
+        ▲                                                      │
+        └──────────────── microphone re-opens ◀────────────────┘
+```
+
+The difference to the microphone button on the brain screen is that the loop
+closes itself. After ZERO has finished speaking the microphone opens again, so
+a conversation runs without touching the machine, and:
+
+- it never listens **while** ZERO is speaking, so ZERO cannot hear itself;
+- a pause the engine reports as `no-speech` re-arms instead of ending the
+  conversation — anything else stops it and says why;
+- **end conversation** releases the microphone and the audio immediately;
+- **push to talk** is still there for a single turn.
+
+The orb is not an animation. While listening it follows the real microphone
+level, while ZERO speaks it follows the measured playback amplitude — the same
+two signals the brain screen uses. Silence looks like silence.
+
+It is the same `ConversationPipeline` as everywhere else: ZERO routes, the
+selected agents actually run, ZERO answers. Voice mode is a surface, not a
+second brain.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `VITE_ZERO_VOICE_MODE_CONTINUOUS` | `true` | Re-open the microphone after every answer |
+| `VITE_ZERO_VOICE_MODE_RESTART_MS` | `600` | Pause before it re-opens |
+| `VITE_ZERO_VOICE_MODE_AUTOSTART` | `false` | Start listening as soon as `/voice` opens |
+
 ## ZERO voice
 
 The voice is an abstraction with interchangeable providers:
@@ -290,10 +467,161 @@ Voice Provider → ZERO Voice Service → Audio Playback → Audio Analyser
   chunks ZERO streams back (`thread/realtime/outputAudio/delta`). Requires
   `VITE_ZERO_EXPERIMENTAL_API=true`, an existing thread and an authenticated
   ZERO. If it fails at runtime the service hands over to the next provider.
+- `fish-audio`: Fish Audio speaks ZERO's answer. See below.
 - `speech-synthesis`: browser fallback. Voice character is shaped through rate,
   pitch and a male-voice preference ranking — calm, precise, authoritative. It
   is an independent ZERO voice, not an imitation or clone of any performer.
 - `none`: disables voice entirely.
+
+Whichever provider is configured is tried first; the others stay behind it as
+fallbacks and each one decides for itself whether it can run here (is ZERO
+connected? is the Fish Audio key on the gateway? is there a platform voice?).
+
+### Fish Audio
+
+```
+interface ──▶ gateway /api/voice/fish/speak ──▶ api.fish.audio ──▶ PCM16 stream
+                                                                        │
+                                          Web Audio graph ◀─────────────┘
+                                                  │
+                                    speakers + analyser → smoke
+```
+
+The gateway is in that path for one reason: **the API key**. It is read from
+`FISH_AUDIO_API_KEY` in the gateway process, it is never sent to the browser
+and it is not part of the bundle — the same rule this repository already
+follows for every upstream credential. The interface only ever posts text to
+its own origin.
+
+Audio is requested as raw PCM16 and scheduled chunk by chunk as it streams in,
+so ZERO starts speaking before the sentence has finished generating and the
+smoke analyses the exact waveform you hear. `mp3`, `wav` and `opus` work too —
+they are decoded as one clip, which costs the streaming start but keeps the
+audio graph intact.
+
+Setup:
+
+1. Get a key at [fish.audio](https://fish.audio/) and put it in `.env.local`
+   as `FISH_AUDIO_API_KEY` (git-ignored, gateway only).
+2. Pick a voice. With the key set, the gateway lists what the key can use:
+   `curl http://127.0.0.1:3000/api/voice/fish/voices`. Put the id in
+   `VITE_ZERO_FISH_VOICE_ID`; empty uses the model's own default speaker.
+3. Set `VITE_ZERO_VOICE_PROVIDER=fish-audio` and rebuild.
+
+`GET /api/voice/fish/status` reports whether the key is configured, which model
+and which voice — and never the key itself. Without a key the provider reports
+`unavailable` with that reason and the service falls through to the next one.
+
+## ZERO Browser — internet access
+
+ZERO reaches the internet through a browser that is really installed on this
+machine. Not a headless scraping stack: Chrome, Firefox, Brave or Edge, driven
+through its own official remote-control protocol.
+
+```
+ZERO ──MCP(stdio)──▶ mcp/brain-browser-server.mjs ──http──▶ gateway /api/browser/*
+                                                                     │
+                                    ┌────────────────────────────────┴──────────┐
+                                    ▼                                           ▼
+                       Chrome · Brave · Edge                              Firefox
+                    (Chrome DevTools Protocol)                    (WebDriver BiDi)
+                                    └──────────────────┬────────────────────────┘
+                                                       ▼
+                                                  the internet
+```
+
+| Browser | Protocol | How it is started |
+| --- | --- | --- |
+| Chrome, Brave, Edge | Chrome DevTools Protocol | `--remote-debugging-port` + isolated `--user-data-dir` |
+| Firefox | WebDriver BiDi | `--remote-debugging-port` + isolated `--profile` |
+
+The bridge finds the browsers itself (known install locations per platform,
+then `PATH`); a browser that is not installed is *reported as not installed*
+rather than dropped, so the panel shows what is missing. Pin an unusual
+location with `ZERO_BROWSER_CHROME_PATH` and friends. The profile is scratch
+state created per run and removed on close — your own profile is never touched.
+
+**Reading a page** is not `innerText`. The injected extractor scores block
+containers by how much of their text is *not* inside a link, which is what
+separates an article from a navigation column, and returns the title, the
+description, the main text and the links.
+
+### The rule that makes this safe
+
+A browser on this machine can also reach this machine. HWD-ZERO listens on
+`127.0.0.1:8000`, the gateway on `:3000`, Ollama and every child agent on
+loopback — the entire point of the gateway is that none of them are reachable
+from outside, and a browser tab is outside.
+
+So the bridge opens **public internet addresses only**. Loopback, link-local,
+private and carrier-grade-NAT ranges, unique-local IPv6 and every non-`http(s)`
+scheme are refused, and the hostname is resolved first so a public name that
+points at a private address (DNS rebinding) is refused too.
+`ZERO_BROWSER_ALLOW_PRIVATE=true` lifts it for an operator who knowingly wants
+that.
+
+### What ZERO gets
+
+| Tool | Does |
+| --- | --- |
+| `browser_search` | Search (DuckDuckGo, Google, Bing or Brave Search) and return the result page's text and links |
+| `browser_open` | Open a public URL and return title, description, text and links |
+| `browser_read` | Re-read the open page without navigating |
+| `browser_status` | Which browsers are installed, which one is running |
+| `browser_close` | Close the browser and release its profile |
+
+The MCP server is deliberately thin — lifecycle, protocols and policy all live
+in the gateway, so the browser ZERO drives is the same browser the interface
+shows. Register it from the integrations panel (below), which writes the exact
+`node …/mcp/brain-browser-server.mjs` command the gateway reports.
+
+## Integrations — Meta Ads, Google Ads, Gmail
+
+The interface can hand ZERO four MCP servers. Every one of them is the vendor's
+own — none is a third-party reseller of an API:
+
+| Integration | Server | Transport | Sign-in |
+| --- | --- | --- | --- |
+| **Meta Ads** | `https://mcp.facebook.com/ads` (Meta) | streamable HTTP | Meta Business OAuth |
+| **Google Ads** | [`googleads/google-ads-mcp`](https://github.com/googleads/google-ads-mcp) (Google) | stdio via `pipx` | environment credentials |
+| **Gmail** | `https://gmailmcp.googleapis.com/mcp/v1` (Google) | streamable HTTP | Google OAuth |
+| **ZERO Browser** | `mcp/brain-browser-server.mjs` (this repository) | stdio | none |
+
+The integrations panel is top right. It shows, per integration, exactly one of
+six states — and every one of them is read back from ZERO, never assumed:
+
+| State | Means |
+| --- | --- |
+| `not registered` | not in ZERO's `mcp_servers` at all |
+| `needs update` | registered with a different transport or arguments than the catalog |
+| `not running` | registered, but `mcpServerStatus/list` reports no server |
+| `sign-in required` | running, `authStatus: notLoggedIn` |
+| `connected` | running and usable, with the tool count ZERO reports |
+| `disabled` | `enabled = false` in ZERO's config |
+
+**register with ZERO** writes `[mcp_servers.<id>]` through ZERO's own
+`config/batchWrite` and then calls `config/mcpServer/reload`, so the tools
+appear without restarting the backend. **sign in** calls
+`mcpServer/oauth/login`; ZERO performs the exchange and stores the token, and
+the panel only ever shows you the URL to open. The interface writes no file and
+holds no credential.
+
+Nothing secret is written into `config.toml` either. Google Ads needs four
+values — `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_PROJECT_ID`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — and they are
+forwarded from ZERO's own environment **by name** (`env_vars`), never by value.
+The panel lists what each integration needs, and links to where you get it.
+
+Two things worth knowing before you rely on them:
+
+- Google's Google Ads server is **read-only by design**. It runs GAQL queries
+  and reads metadata; it cannot change bids, pause campaigns or create assets.
+- Meta's Ads MCP is in beta and inherits exactly the permissions of the Meta
+  login you authorise with — no more, and no less.
+
+Once registered, these are ordinary MCP servers to the rest of the interface:
+they appear as tool provider nodes in the graph with their tools, and an
+`mcpToolCall` lights up the exact `server/tool` node while ZERO uses it.
 
 Because the platform synthesizer cannot be routed through the Web Audio graph,
 the fallback provider exposes only its real word-boundary events; full
@@ -334,6 +662,16 @@ The interface never crashes when ZERO is degraded:
 - An API a ZERO build does not support → recorded as a capability note.
 - Realtime/voice unavailable or `AudioContext` blocked → voice reports
   `unavailable`, everything else keeps running.
+- No Fish Audio key on the gateway → the provider reports that reason and the
+  voice service falls through to the next provider.
+- No gateway (a bare `npm run dev`) → the browser bridge and the Fish Audio
+  voice are simply absent; the graph, the conversation and ZERO's own realtime
+  voice are unaffected.
+- No supported browser installed → the bridge says which ones it looked for,
+  and `browser_search`/`browser_open` return that as a tool error rather than
+  hanging.
+- An integration ZERO has not been given → it shows as `not registered` with
+  what it needs, never as connected.
 
 ## Build
 
@@ -345,7 +683,10 @@ npm run preview   # serve the production build
 ## Tests
 
 ```bash
-npm test          # vitest (protocol client, adapter, graph transform, layout, audio, config)
+npm test          # vitest (protocol client, adapter, graph transform, layout, audio, config,
+                  #         websocket framing, browser detection + URL policy, Fish Audio,
+                  #         the integration catalog and provisioning, the browser MCP server,
+                  #         and the gateway end to end)
 npm run typecheck # tsc -b --force
 npm run lint      # eslint
 ```

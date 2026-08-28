@@ -1,0 +1,95 @@
+# Harness Open Source pipeline for the Brain Interface.
+#
+# This is the repository's home on Harness: every push is verified here, and
+# the result is a container image in Harness' own registry that serves the
+# built interface, the gateway, Fish Audio and the browser bridge.
+#
+#     push ──▶ verify ──▶ image ──▶ Harness registry ──▶ run next to ZERO
+#
+# Add it under Pipelines with the config path `.harness/brain-interface.yaml`.
+# The `image` stage only runs when a registry is configured — see `inputs`.
+version: 1
+kind: pipeline
+spec:
+  inputs:
+    registry:
+      type: string
+      description: >-
+        Harness registry host that receives the image, for example
+        host.docker.internal:3000/brain-interface. Leave empty to verify only.
+      default: ""
+    image_name:
+      type: string
+      description: Repository name inside the registry.
+      default: brain-interface
+    node_image:
+      type: string
+      description: >-
+        Node image the verification runs in. The interface needs Node 20.19 or
+        newer; 22 is what it is developed against.
+      default: node:22-alpine
+
+  stages:
+    - name: verify
+      type: ci
+      spec:
+        # npm's cache, not node_modules: the lockfile decides what is installed,
+        # the cache only decides how fast.
+        cache:
+          enabled: true
+          key: brain-interface-npm-{{ checksum "package-lock.json" }}
+          paths:
+            - /root/.npm
+        steps:
+          - name: install
+            type: script
+            spec:
+              image: ${{ inputs.node_image }}
+              # `npm ci`, never `npm install`: the lockfile is the contract.
+              run: npm ci --no-audit --no-fund
+
+          - name: typecheck
+            type: script
+            spec:
+              image: ${{ inputs.node_image }}
+              run: npm run typecheck
+
+          - name: lint
+            type: script
+            spec:
+              image: ${{ inputs.node_image }}
+              run: npm run lint
+
+          - name: test
+            type: script
+            spec:
+              image: ${{ inputs.node_image }}
+              run: npm test
+
+          - name: build
+            type: script
+            spec:
+              image: ${{ inputs.node_image }}
+              # The gateway serves `dist/`; a build that does not produce it is
+              # a failed build, so it is asserted rather than assumed.
+              run: |
+                npm run build
+                test -f dist/index.html
+
+    - name: image
+      type: ci
+      when: ${{ inputs.registry != "" }}
+      spec:
+        steps:
+          - name: publish
+            type: plugin
+            spec:
+              image: plugins/docker
+              with:
+                registry: ${{ inputs.registry }}
+                repo: ${{ inputs.registry }}/${{ inputs.image_name }}
+                username: ${{ secrets.get("registry_username") }}
+                password: ${{ secrets.get("registry_password") }}
+                tags:
+                  - ${{ build.number }}
+                  - latest

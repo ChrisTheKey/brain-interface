@@ -115,7 +115,14 @@ export function decodePcm16Base64(
   numChannels: number,
   decodeBase64: (value: string) => Uint8Array,
 ): Float32Array[] {
-  const bytes = decodeBase64(base64);
+  return decodePcm16Bytes(decodeBase64(base64), numChannels);
+}
+
+/**
+ * Decode raw PCM16 little-endian bytes into planar float samples. Fish Audio
+ * streams PCM over HTTP, so its chunks arrive as bytes rather than base64.
+ */
+export function decodePcm16Bytes(bytes: Uint8Array, numChannels: number): Float32Array[] {
   const channels = Math.max(1, numChannels);
   const frameCount = Math.floor(bytes.length / 2 / channels);
   const planes: Float32Array[] = [];

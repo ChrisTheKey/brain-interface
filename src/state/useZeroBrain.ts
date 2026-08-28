@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { config } from '../config';
+import { config, type VoiceProviderChoice } from '../config';
 import { buildGraph, type GraphRuntime } from '../graph/transform';
 import type { GraphModel } from '../graph/model';
 import { ZeroClient, type ConnectionState } from '../zero/client';
@@ -14,11 +14,19 @@ import { ZeroDataAdapter, type ActivityEvent, type ZeroSnapshot } from '../zero/
 import type { ThreadStatus } from '../zero/protocol';
 import { ZeroVoiceService } from '../voice/service';
 import { ZeroRealtimeVoiceProvider } from '../voice/realtimeProvider';
+import { FishAudioVoiceProvider } from '../voice/fishAudioProvider';
 import { SpeechSynthesisVoiceProvider } from '../voice/speechSynthesisProvider';
 import { ZERO_VOICE_CHARACTER, type VoiceProvider } from '../voice/provider';
 import type { VoiceState } from '../voice/service';
 
 const MAX_ACTIVITY = 60;
+
+/** Fallback chain behind whichever provider is configured. */
+const VOICE_FALLBACK_ORDER: readonly VoiceProviderChoice[] = [
+  'zero-realtime',
+  'fish-audio',
+  'speech-synthesis',
+];
 
 export interface BrainState {
   /** The live ZERO client (null until the first connection attempt). */
@@ -85,28 +93,43 @@ export function useZeroBrain(runtime: GraphRuntime = {}): BrainState {
     clientRef.current = client;
     adapterRef.current = adapter;
 
-    const providers: VoiceProvider[] = [];
-    if (config.voice.provider === 'zero-realtime') {
-      providers.push(
-        new ZeroRealtimeVoiceProvider({
-          client,
-          getThreadId: () => selectedThreadRef.current,
-          experimentalApi: config.experimentalApi,
-          voicePrompt: config.voice.prompt,
-        }),
-      );
-    }
-    if (config.voice.provider !== 'none') {
-      providers.push(
-        new SpeechSynthesisVoiceProvider({
-          ...ZERO_VOICE_CHARACTER,
-          rate: config.voice.rate,
-          pitch: config.voice.pitch,
-          volume: config.voice.volume,
-          preferredVoices: config.voice.preferredVoices,
-        }),
-      );
-    }
+    // The configured provider is tried first; the rest stay behind it as
+    // fallbacks, and each one decides for itself whether it is usable here
+    // (ZERO connected? Fish Audio key on the gateway? a platform voice?).
+    const buildProvider = (id: VoiceProviderChoice): VoiceProvider | null => {
+      switch (id) {
+        case 'zero-realtime':
+          return new ZeroRealtimeVoiceProvider({
+            client,
+            getThreadId: () => selectedThreadRef.current,
+            experimentalApi: config.experimentalApi,
+            voicePrompt: config.voice.prompt,
+          });
+        case 'fish-audio':
+          return new FishAudioVoiceProvider({ ...config.voice.fish });
+        case 'speech-synthesis':
+          return new SpeechSynthesisVoiceProvider({
+            ...ZERO_VOICE_CHARACTER,
+            rate: config.voice.rate,
+            pitch: config.voice.pitch,
+            volume: config.voice.volume,
+            preferredVoices: config.voice.preferredVoices,
+          });
+        default:
+          return null;
+      }
+    };
+
+    const order: VoiceProviderChoice[] =
+      config.voice.provider === 'none'
+        ? []
+        : [
+            config.voice.provider,
+            ...VOICE_FALLBACK_ORDER.filter((id) => id !== config.voice.provider),
+          ];
+    const providers = order
+      .map(buildProvider)
+      .filter((provider): provider is VoiceProvider => provider !== null);
     const voice = new ZeroVoiceService(providers);
     voiceRef.current = voice;
 

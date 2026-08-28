@@ -4,13 +4,14 @@
  *   Voice Provider  →  ZERO Voice Service  →  Audio Playback  →  Audio Analyser
  *
  * Providers are interchangeable and carry no credentials: ZERO's own realtime
- * session is the default provider, the browser speech synthesizer is the
- * offline fallback. A provider that can route through the Web Audio graph
- * exposes `connect()`, which is what makes the smoke audio-reactive.
+ * session is the default provider, Fish Audio speaks through the gateway (which
+ * holds the key), and the browser speech synthesizer is the offline fallback.
+ * A provider that can route through the Web Audio graph exposes `connect()`,
+ * which is what makes the smoke audio-reactive.
  */
 import type { AudioLevels } from '../audio/analyser';
 
-export type VoiceProviderId = 'zero-realtime' | 'speech-synthesis' | 'none';
+export type VoiceProviderId = 'zero-realtime' | 'fish-audio' | 'speech-synthesis' | 'none';
 
 export interface VoiceSpeakOptions {
   signal?: AbortSignal;
