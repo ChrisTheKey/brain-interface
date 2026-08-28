@@ -7,6 +7,8 @@ export interface GatewayConfig {
   host: string;
   lanMode: boolean;
   zeroApi: string;
+  /** ZERO's app-server, carried on `/zero-ws`; never leaves loopback. */
+  zeroAppServer: string;
   distDir: string;
   tokenFile: string;
   rateLimit: number;
@@ -26,6 +28,9 @@ export interface NetworkInterfaceEntry {
 
 export declare const DEFAULT_PORT: number;
 export declare const DEFAULT_ZERO_API: string;
+export declare const DEFAULT_ZERO_APP_SERVER: string;
+/** Gateway path that carries the ZERO app-server WebSocket. */
+export declare const ZERO_WS_PATH: string;
 
 export declare function readConfig(env?: Record<string, string | undefined>): GatewayConfig;
 export declare function loadOrCreateToken(tokenFile: string): string;
@@ -42,6 +47,9 @@ export declare function createRateLimiter(
   now?: () => number,
 ): (key: string) => boolean;
 export declare function resolveStaticPath(distDir: string, urlPath: string): string | null;
+
+/** Upstream query string with the gateway's own pairing token removed. */
+export declare function upstreamSearch(search: string): string;
 
 export declare class HttpError extends Error {
   constructor(message: string, status?: number);

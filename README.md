@@ -158,7 +158,7 @@ credential.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VITE_ZERO_WS_URL` | `ws://127.0.0.1:8787` | ZERO app-server WebSocket endpoint |
+| `VITE_ZERO_WS_URL` | `ws://127.0.0.1:8787` | ZERO app-server endpoint. `/zero-ws` routes it through the gateway (required for the phone) |
 | `VITE_ZERO_CLIENT_NAME` | `brain_interface` | Client name sent in `initialize` |
 | `VITE_ZERO_CLIENT_VERSION` | `0.1.0` | Client version sent in `initialize` |
 | `VITE_ZERO_EXPERIMENTAL_API` | `true` | Opt into ZERO's experimental API (required for realtime voice) |
@@ -219,8 +219,39 @@ ZERO-WORKSPACE/
 
 ## Laptop and Samsung Galaxy access
 
-The gateway is the single origin — port 3000 serves the interface, `/api` and
-`/ws`; HWD-ZERO, Ollama and every child agent stay on `127.0.0.1`.
+The gateway is the single origin — port 3000 serves the interface, `/api`,
+`/ws` and `/zero-ws`; HWD-ZERO, the ZERO app-server, Ollama and every child
+agent stay on `127.0.0.1`.
+
+### Reaching ZERO from a second device
+
+`VITE_ZERO_WS_URL` is resolved **in the browser**. `ws://127.0.0.1:8787` on a
+phone therefore means the *phone's* own loopback, not the laptop's — which is
+why a phone shows `ZERO disconnected` even while the interface itself loads
+fine. Set the endpoint to the gateway path instead:
+
+```bash
+VITE_ZERO_WS_URL=/zero-ws     # then: npm run build
+```
+
+```
+phone browser ──ws://<laptop>:3000/zero-ws──▶ gateway ──▶ 127.0.0.1:8787
+                        (token required)                  (never leaves loopback)
+```
+
+The gateway carries the connection, so:
+
+- the app-server keeps binding loopback only — it is never exposed to the LAN,
+  which matters because it can start threads and run commands;
+- the upgrade needs the same token as every other route, so a device that has
+  not paired is refused with `401`;
+- the pairing token is stripped before anything travels upstream — ZERO never
+  sees the gateway's own credential;
+- `wss://` is used automatically when the page itself is served over https.
+
+The alternative — binding the app-server to `0.0.0.0` and pointing the phone
+straight at it — works too, and is what this route exists to avoid: it would
+put an unauthenticated command-execution endpoint on the network.
 
 ```bash
 scripts/setup-zero.sh        # once: install, build, create .env.local

@@ -6,7 +6,14 @@ import { ZERO_VOICE_PROMPT } from './voice/provider';
  */
 
 export interface BrainInterfaceConfig {
-  /** WebSocket URL of ZERO's app-server (`codex app-server --listen ws://IP:PORT`). */
+  /**
+   * WebSocket endpoint of ZERO's app-server, always absolute.
+   *
+   * A relative value (`/zero-ws`) is resolved against the page's own origin,
+   * which is the only form that works on a second device: `ws://127.0.0.1:8787`
+   * is evaluated *in the browser*, so on a phone it means the phone's own
+   * loopback. Through the gateway the address is whatever served the page.
+   */
   zeroWsUrl: string;
   clientName: string;
   clientVersion: string;
@@ -105,6 +112,33 @@ const BROWSERS = ['chrome', 'firefox', 'brave', 'edge'] as const;
 
 type EnvRecord = Record<string, string | boolean | undefined>;
 
+/** Just enough of `window.location` to build an absolute WebSocket URL. */
+export interface PageLocation {
+  protocol: string;
+  host: string;
+}
+
+/**
+ * Turns the configured ZERO endpoint into an absolute WebSocket URL.
+ *
+ * `ws://…` and `wss://…` are used as they are. A path (`/zero-ws`) is resolved
+ * against the page origin, so the same build works on the laptop and on a
+ * phone: both reach the gateway that served them, and the gateway carries the
+ * connection to the app-server on its own loopback.
+ */
+export function resolveZeroWsUrl(configured: string, location?: PageLocation): string {
+  const value = configured.trim();
+  if (/^wss?:\/\//i.test(value)) return value;
+  if (!value.startsWith('/')) return value;
+  if (!location?.host) {
+    // No page to resolve against (tests, SSR): keep the path, so the caller
+    // sees what was configured instead of a wrong absolute address.
+    return value;
+  }
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${scheme}//${location.host}${value}`;
+}
+
 function readString(env: EnvRecord, key: string, fallback: string): string {
   const value = env[key];
   if (typeof value !== 'string') return fallback;
@@ -132,7 +166,7 @@ function readList(env: EnvRecord, key: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
+export function resolveConfig(env: EnvRecord, location?: PageLocation): BrainInterfaceConfig {
   const agentRoot = readString(env, 'VITE_ZERO_AGENT_ROOT', '');
   const execSandboxRaw = readString(env, 'VITE_ZERO_EXEC_SANDBOX', 'readOnly');
   const execSandbox =
@@ -165,7 +199,7 @@ export function resolveConfig(env: EnvRecord): BrainInterfaceConfig {
     : 'chrome';
 
   return {
-    zeroWsUrl: readString(env, 'VITE_ZERO_WS_URL', 'ws://127.0.0.1:8787'),
+    zeroWsUrl: resolveZeroWsUrl(readString(env, 'VITE_ZERO_WS_URL', 'ws://127.0.0.1:8787'), location),
     clientName: readString(env, 'VITE_ZERO_CLIENT_NAME', 'brain_interface'),
     clientVersion: readString(env, 'VITE_ZERO_CLIENT_VERSION', '0.1.0'),
     experimentalApi: readBoolean(env, 'VITE_ZERO_EXPERIMENTAL_API', true),
@@ -228,4 +262,7 @@ export const config: BrainInterfaceConfig = resolveConfig(
   (typeof import.meta !== 'undefined' && import.meta.env
     ? (import.meta.env as unknown as EnvRecord)
     : {}) as EnvRecord,
+  typeof globalThis !== 'undefined' && 'location' in globalThis
+    ? (globalThis.location as unknown as PageLocation)
+    : undefined,
 );
