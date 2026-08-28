@@ -1,0 +1,55 @@
+# Harness Open Source as the home for the Brain Interface.
+#
+#   http://<host>:3000  Harness — the repository, the pipeline, the registry
+#   http://<host>:3001  the Brain Interface (the image the pipeline built)
+#
+# Both containers listen on 3000 internally: Harness because that is its
+# default, the interface because port 3000 is a hard requirement of its
+# gateway. They only collide on the *host*, so the interface is published on
+# 3001. Nothing has to be rebuilt for that — `VITE_ZERO_WS_URL=/zero-ws` is
+# resolved against the origin that served the page, port included.
+services:
+  harness:
+    image: harness/harness:latest
+    container_name: harness
+    restart: always
+    ports:
+      - "3000:3000"
+      - "3022:3022"
+    volumes:
+      # Harness runs pipeline steps as containers of its own.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - harness-data:/data
+
+  brain-interface:
+    # What the pipeline pushed. Point this at your Harness registry, e.g.
+    #   host.docker.internal:3000/brain-interface/brain-interface:latest
+    image: ${BRAIN_INTERFACE_IMAGE:-brain-interface:latest}
+    container_name: brain-interface
+    restart: always
+    depends_on:
+      - harness
+    ports:
+      - "3001:3000"
+    environment:
+      # ZERO's app-server runs on the host, not in this container, so
+      # 127.0.0.1 would be the container itself. The gateway reaches it
+      # through the host gateway address and carries it on /zero-ws.
+      ZERO_APP_SERVER_URL: ws://host.docker.internal:8787
+      ZERO_API_URL: http://host.docker.internal:8000
+      # Required for anything but the host itself to reach the interface.
+      ZERO_LAN_MODE: "true"
+      # Set to give ZERO its Fish Audio voice. Keep it in a .env file next to
+      # this one — never in the image, never in the bundle.
+      FISH_AUDIO_API_KEY: ${FISH_AUDIO_API_KEY:-}
+      FISH_AUDIO_VOICE_ID: ${FISH_AUDIO_VOICE_ID:-}
+    extra_hosts:
+      # Linux does not provide host.docker.internal by itself.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Keeps the pairing token across restarts, so paired phones stay paired.
+      - brain-interface-data:/data
+
+volumes:
+  harness-data:
+  brain-interface-data:

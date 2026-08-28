@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   constantTimeEquals,
   createRateLimiter,
@@ -105,5 +106,30 @@ describe('LAN address detection', () => {
 
   it('returns null when the laptop has no network', () => {
     expect(detectLanAddress({ lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }] })).toBeNull();
+  });
+});
+
+describe('the Harness pipeline', () => {
+  it('is written in the dialect Harness detects as v1', () => {
+    // Harness picks the engine with this exact test (`isV1Yaml` in
+    // app/pipeline/triggerer/trigger.go): a line starting with `spec:` means
+    // the v1 engine, anything else falls through to the legacy Drone one.
+    const pipeline = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '.harness', 'brain-interface.yaml'),
+      'utf8',
+    );
+    expect(pipeline).toMatch(/^version: 1$/m);
+    expect(pipeline).toMatch(/^kind: pipeline$/m);
+    expect(pipeline).toMatch(/^spec:/m);
+  });
+
+  it('verifies the same four things a contributor runs locally', () => {
+    const pipeline = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '.harness', 'brain-interface.yaml'),
+      'utf8',
+    );
+    for (const command of ['npm ci', 'npm run typecheck', 'npm run lint', 'npm test', 'npm run build']) {
+      expect(pipeline, command).toContain(command);
+    }
   });
 });

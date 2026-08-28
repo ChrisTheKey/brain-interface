@@ -268,6 +268,82 @@ the `?token=…` it prints; the token is generated on first run into
 
 LAN access is deliberately the boundary: no tunnel, no UPnP, no port forwarding.
 
+## Harness Open Source as the home
+
+The repository, the pipeline and the image live on
+[Harness Open Source](https://github.com/harness/harness) — self-hosted, one
+container:
+
+```
+push ──▶ .harness/brain-interface.yaml ──▶ verify ──▶ image ──▶ Harness registry
+                                                                      │
+                                                   docker compose ◀───┘
+```
+
+### The port collision, first
+
+Harness listens on **3000**. So does the Brain Interface gateway, and for it
+that is a hard requirement. Inside their own containers both are fine; they
+only collide on the host, so the interface is published on **3001**:
+
+| | |
+| --- | --- |
+| `http://<host>:3000` | Harness — repository, pipeline, registry |
+| `http://<host>:3001` | the Brain Interface |
+
+Nothing has to be rebuilt for the different port: `VITE_ZERO_WS_URL=/zero-ws`
+is resolved against the origin that served the page, port included.
+
+### The pipeline
+
+`.harness/brain-interface.yaml` is a v1 pipeline. Add it under **Pipelines**
+with exactly that config path. It runs what a contributor runs locally —
+`npm ci`, `typecheck`, `lint`, `test`, `build` — and then, only when the
+`registry` input is set, builds and pushes the image.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `registry` | – | Harness registry host. Empty means verify only, no image |
+| `image_name` | `brain-interface` | Repository inside the registry |
+| `node_image` | `node:22-alpine` | Node the verification runs in |
+
+The push needs two secrets in Harness, `registry_username` and
+`registry_password`.
+
+### The image
+
+`Dockerfile` builds in two stages. The interface compiles to static files and
+the gateway is plain Node ESM on built-in modules only, so **the runtime image
+carries no `node_modules` at all** — Node, the bundle, the server. Chromium is
+installed because it *is* ZERO's internet access; the browser bridge drives it
+over the DevTools Protocol, so the browser tools work without a browser on the
+host.
+
+The `VITE_*` values are build arguments, not runtime environment — Vite bakes
+them into the bundle, so changing the voice provider or the agent root means
+building the image again:
+
+```bash
+docker build -t brain-interface \
+  --build-arg VITE_ZERO_WS_URL=/zero-ws \
+  --build-arg VITE_ZERO_VOICE_PROVIDER=fish-audio \
+  --build-arg VITE_ZERO_FISH_VOICE_ID=<voice> .
+```
+
+Everything the gateway itself reads — the Fish Audio key, the browser policy,
+the upstream addresses — stays runtime environment and never enters the image.
+
+### Running both
+
+```bash
+FISH_AUDIO_API_KEY=… docker compose -f docker-compose.harness.yml up -d
+```
+
+ZERO's app-server runs on the host, not in a container, so the compose file
+points the gateway at `host.docker.internal:8787` and carries it on
+`/zero-ws`. The phone opens `http://<host>:3001/?token=…` and reaches ZERO
+through that one authenticated origin.
+
 ## Development
 
 ### 1. Start the ZERO backend
